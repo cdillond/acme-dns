@@ -256,6 +256,11 @@ func (c Client) fetchUnmarshalAuthz(ctx context.Context, url, loc string, key ES
 		err = &bad
 	} else {
 		err = json.UnmarshalDecode(dec, out)
+
+		out.retryAfter = parseRetryAfterHeader(res.Header.Get("Retry-After"))
+		if out.retryAfter.IsZero() {
+			out.retryAfter = time.Now().Add(DefaultInterval)
+		}
 	}
 
 	return err
@@ -271,7 +276,7 @@ func parseRetryAfterHeader(s string) time.Time {
 		return t
 	}
 	// implemented either as a non-negative number of seconds OR a date time
-	if n, err = strconv.ParseInt(s, 10, 64); err != nil {
+	if n, err = strconv.ParseInt(s, 10, 64); err == nil {
 		if n < 0 {
 			return t
 		}
@@ -283,7 +288,7 @@ func parseRetryAfterHeader(s string) time.Time {
 	return t
 }
 
-func (c Client) FetchRawChallenge(ctx context.Context, url string, a Account) (RawChallenge, error) {
+func (c Client) fetchChallenge(ctx context.Context, url string, a Account, payload []byte) (RawChallenge, error) {
 	var (
 		out RawChallenge
 		res *http.Response
@@ -292,7 +297,7 @@ func (c Client) FetchRawChallenge(ctx context.Context, url string, a Account) (R
 		err error
 	)
 
-	if res, err = c.signedPostAsGet(ctx, url, a.Location, a.ES256Key); err != nil {
+	if res, err = c.signedPost(ctx, url, a.Location, a.ES256Key, payload); err != nil {
 		return out, err
 	}
 
@@ -310,14 +315,30 @@ func (c Client) FetchRawChallenge(ctx context.Context, url string, a Account) (R
 		err = &bad
 	} else {
 		err = json.UnmarshalDecode(dec, &out)
-		if err != nil {
+		if err == nil {
 			out.RetryAfter = parseRetryAfterHeader(
 				res.Header.Get("Retry-After"),
 			)
+			if out.RetryAfter.IsZero() {
+				out.RetryAfter = time.Now().Add(DefaultInterval)
+			}
 		}
 	}
 
 	return out, err
+}
+
+// FetchRawChallenge fetches the current state of a challenge without starting
+// validation.
+func (c Client) FetchRawChallenge(ctx context.Context, url string, a Account) (RawChallenge, error) {
+	return c.fetchChallenge(ctx, url, a, []byte{})
+}
+
+// AcceptChallenge tells the ACME server that the challenge response has been
+// provisioned and that validation should begin. Per RFC 8555 section 7.5.1,
+// this is a POST with an empty JSON object ("{}") to the challenge URL.
+func (c Client) AcceptChallenge(ctx context.Context, url string, a Account) (RawChallenge, error) {
+	return c.fetchChallenge(ctx, url, a, []byte("{}"))
 }
 
 func (c Client) FetchAuthz(ctx context.Context, a Account, o Order) ([]Authz, error) {

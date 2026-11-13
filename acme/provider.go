@@ -6,7 +6,7 @@ import (
 
 type CleanupFunc func(context.Context) error
 
-// A Provider updates a DNS record; note - if logging is enabled, context passes a logger.
+// A Provider updates a DNS record.
 type Provider interface {
 	Provision(context.Context, TxtRecord) (CleanupFunc, error)
 }

@@ -160,6 +160,7 @@ type Challenge struct {
 	Type      string          `json:"type"`
 	URL       string          `json:"url"`
 	Status    ChallengeStatus `json:"status"`
+	Token     string          `json:"token"`
 	Validated time.Time       `json:"validated,omitzero"`
 	Error     *Problem        `json:"error,omitzero"`
 }
@@ -193,6 +194,11 @@ func NewChallengeStatus(s string) ChallengeStatus {
 	}
 
 	return ChallengeStatus(n)
+}
+
+// returns true if c is a terminal status (i.e., not processing or pending)
+func (c ChallengeStatus) isDone() bool {
+	return !(c == ChallengeStatusPending || c == ChallengeStatusProcessing)
 }
 
 func (c ChallengeStatus) String() string {

@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 
 	"go.ciaran.lol/acme-dns/acme"
 )
@@ -23,16 +24,18 @@ func (e *ErrorResponse) Error() string {
 }
 
 const (
-	BaseUrl = "https://api.digitalocean.com/"
+	BaseUrl = "https://api.digitalocean.com/v2/domains"
 )
 
 type Provider struct {
-	token string
+	token      string
+	baseDomain string
 }
 
-func NewProvider(token string) *Provider {
+func NewProvider(token string, baseDomain string) *Provider {
 	return &Provider{
-		token: token,
+		token:      token,
+		baseDomain: baseDomain,
 	}
 }
 
@@ -46,6 +49,10 @@ type domainRecordEditRequest struct {
 	Weight   int    `json:"weight"`
 	Flags    int    `json:"flags"`
 	Tag      string `json:"tag,omitempty"`
+}
+
+type domainResponse struct {
+	domainRecord `json:"domain_record"`
 }
 
 type domainRecord struct {
@@ -77,7 +84,7 @@ func (p *Provider) do(ctx context.Context, method, url string, body io.Reader) (
 	return http.DefaultClient.Do(req)
 }
 
-func (p *Provider) deprovision(ctx context.Context, baseDomain string, id int) error {
+func (p *Provider) deprovision(ctx context.Context, id int) error {
 	var (
 		err error
 		url string
@@ -86,7 +93,7 @@ func (p *Provider) deprovision(ctx context.Context, baseDomain string, id int) e
 		dec *jsontext.Decoder
 	)
 
-	url = fmt.Sprintf("%s%s/records/%d", BaseUrl, baseDomain, id)
+	url = fmt.Sprintf("%s/%s/records/%d", BaseUrl, p.baseDomain, id)
 
 	if res, err = p.do(ctx, http.MethodDelete, url, nil); err != nil {
 		return err
@@ -113,10 +120,10 @@ func (p *Provider) Provision(ctx context.Context, txt acme.TxtRecord) (acme.Clea
 	var (
 		err error
 		res *http.Response
-		ans domainRecord
+		ans domainResponse
 		bad ErrorResponse
 		dec *jsontext.Decoder
-		url = fmt.Sprintf("%s%s/records", BaseUrl, txt.BaseDomain)
+		url = fmt.Sprintf("%s/%s/records", BaseUrl, p.baseDomain)
 		d   = domainRecordEditRequest{
 			Type: "TXT",
 			Name: txt.Name,
@@ -126,6 +133,8 @@ func (p *Provider) Provision(ctx context.Context, txt acme.TxtRecord) (acme.Clea
 		buf = new(bytes.Buffer)
 		enc = jsontext.NewEncoder(buf)
 	)
+
+	d.Name, _ = strings.CutSuffix(d.Name, "."+p.baseDomain)
 
 	if err = json.MarshalEncode(enc, d); err != nil {
 		return nil, err
@@ -153,7 +162,10 @@ func (p *Provider) Provision(ctx context.Context, txt acme.TxtRecord) (acme.Clea
 		return nil, err
 	}
 
+	fmt.Printf("\n\nans\n%#v\n", ans)
+
 	return func(c context.Context) error {
-		return p.deprovision(c, txt.BaseDomain, ans.ID)
+		fmt.Println("deprovisioning")
+		return p.deprovision(c, ans.ID)
 	}, nil
 }

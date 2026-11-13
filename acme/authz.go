@@ -13,6 +13,7 @@ type Authz struct {
 	Expires    time.Time   `json:"expires,omitzero"`
 	Challenges []Challenge `json:"challenges"`
 	Wildcard   bool        `json:"wildcard"`
+	retryAfter time.Time   `json:"-"`
 }
 
 type AuthzStatus uint32
