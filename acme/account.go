@@ -142,8 +142,12 @@ func newAccount(req AccountRequest, res accountResponse, loc string) (Account, e
 	}
 
 	return Account{
-		ES256Key:               req.ES256Key,
-		Location:               loc,
+		ES256Key: ES256Key{
+			id:         loc,
+			pk:         req.pk,
+			thumbprint: req.thumbprint,
+		},
+		//Location:               loc,
 		CreatedAt:              res.CreatedAt,
 		Status:                 res.Status,
 		Contact:                contact,
@@ -154,8 +158,8 @@ func newAccount(req AccountRequest, res accountResponse, loc string) (Account, e
 }
 
 type Account struct {
-	ES256Key               ES256Key               `json:"-"`
-	Location               string                 `json:"-"`
+	ES256Key ES256Key `json:"-"`
+	//Location               string                 `json:"-"`
 	CreatedAt              time.Time              `json:"createdAt"`
 	Status                 AccountStatus          `json:"status"`
 	Contact                []string               `json:"contact"`

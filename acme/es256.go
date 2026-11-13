@@ -9,6 +9,7 @@ import (
 )
 
 type ES256Key struct {
+	id         string
 	pk         *ecdsa.PrivateKey
 	thumbprint []byte
 }
@@ -17,7 +18,7 @@ func (e ES256Key) Bytes() ([]byte, error) {
 	return e.pk.Bytes()
 }
 
-func newE256KeyfromECDSA(pk *ecdsa.PrivateKey) (ES256Key, error) {
+func newE256KeyFromECDSA(pk *ecdsa.PrivateKey) (ES256Key, error) {
 	jwk := jose.JSONWebKey{
 		Key: pk,
 	}
@@ -42,7 +43,7 @@ func NewE256Key() (ES256Key, error) {
 		return ES256Key{}, err
 	}
 
-	return newE256KeyfromECDSA(pk)
+	return newE256KeyFromECDSA(pk)
 }
 
 func NewE256KeyFromBytes(b []byte) (ES256Key, error) {
@@ -51,5 +52,5 @@ func NewE256KeyFromBytes(b []byte) (ES256Key, error) {
 		return ES256Key{}, err
 	}
 
-	return newE256KeyfromECDSA(pk)
+	return newE256KeyFromECDSA(pk)
 }

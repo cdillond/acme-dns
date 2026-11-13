@@ -124,20 +124,21 @@ type orderRequest struct {
 }
 
 type Order struct {
-	// Location is the order's URL, taken from the Location header of the
-	// newOrder response. It is needed to poll and finalize the order.
-	Location       string              `json:"-"`
-	Status         OrderStatus         `json:"status"`
-	Expires        time.Time           `json:"expires"`
-	Identifiers    []Identifier        `json:"identifiers"`
-	NotBefore      time.Time           `json:"notBefore"`
-	NotAfter       time.Time           `json:"notAfter"`
-	Authorizations []string            `json:"authorizations"`
-	Finalize       string              `json:"finalize"`
-	CertificateURL string              `json:"certificate"`
-	Error          *Problem            `json:"error,omitzero"`
-	domains        map[string]Provider `json:"-"`
-	retryAfter     retryAfter          `json:"-"`
+	Status         OrderStatus  `json:"status"`
+	Expires        time.Time    `json:"expires"`
+	Identifiers    []Identifier `json:"identifiers"`
+	NotBefore      time.Time    `json:"notBefore"`
+	NotAfter       time.Time    `json:"notAfter"`
+	Authorizations []string     `json:"authorizations"`
+	Finalize       string       `json:"finalize"`
+	CertificateURL string       `json:"certificate"`
+	Error          *Problem     `json:"error,omitzero"`
+
+	location   string              `json:"-"`
+	client     *Client             `json:"-"`
+	account    *Account            `json:"-"`
+	domains    map[string]Provider `json:"-"`
+	retryAfter retryAfter          `json:"-"`
 }
 
 func filterChallenges(src []Challenge) *Challenge {
@@ -147,11 +148,6 @@ func filterChallenges(src []Challenge) *Challenge {
 		}
 	}
 	return nil
-}
-
-type challengeResult struct {
-	domain string
-	err    error
 }
 
 func defaultCleanupFn(ctx context.Context) error {
@@ -207,7 +203,7 @@ func waitForDns(ctx context.Context, domain, targ string, retries int) {
 	fmt.Println("out of retries")
 }
 
-func (c *Client) provisionAuthz(ctx context.Context, a Account, az Authz, domains map[string]Provider) (TxtRecord, CleanupFunc, error) {
+func (c *Client) provisionAuthz(ctx context.Context, key ES256Key, az Authz, domains map[string]Provider) (TxtRecord, CleanupFunc, error) {
 	dnsChallenge := filterChallenges(az.Challenges)
 	if dnsChallenge == nil {
 		return TxtRecord{}, nil, errors.New("no dns challenge available for Authz")
@@ -226,7 +222,7 @@ func (c *Client) provisionAuthz(ctx context.Context, a Account, az Authz, domain
 	txt := TxtRecord{
 		TTL:  DefaultTTL,
 		Name: "_acme-challenge." + az.Identifier.Value,
-		Txt:  newDNS01Txt(dnsChallenge.Token, a.ES256Key),
+		Txt:  newDNS01Txt(dnsChallenge.Token, key),
 	}
 
 	cleanup, err := p.Provision(ctx, txt)
@@ -240,13 +236,13 @@ func (c *Client) provisionAuthz(ctx context.Context, a Account, az Authz, domain
 	return txt, cleanup, nil
 }
 
-func (c *Client) validateAuthz(ctx context.Context, a Account, az Authz) error {
+func (c *Client) validateAuthz(ctx context.Context, key ES256Key, az Authz) error {
 	dnsChallenge := filterChallenges(az.Challenges)
 	if dnsChallenge == nil {
 		return errors.New("no dns challenge available for Authz")
 	}
 
-	raw, err := c.AcceptChallenge(ctx, dnsChallenge.URL, a)
+	raw, err := c.acceptChallenge(ctx, dnsChallenge.URL, key)
 	if err != nil {
 		return err
 	}
@@ -254,7 +250,7 @@ func (c *Client) validateAuthz(ctx context.Context, a Account, az Authz) error {
 	for err == nil {
 		switch raw.Status {
 		case ChallengeStatusProcessing:
-			// keep polling
+			// keep polling; no retry limit
 		case ChallengeStatusValid:
 			return nil
 		case ChallengeStatusInvalid:
@@ -263,13 +259,11 @@ func (c *Client) validateAuthz(ctx context.Context, a Account, az Authz) error {
 			return UnexpectedChallengeStatusError(raw.Status)
 		}
 
-		select {
-		case <-raw.retryAfter.wait():
-		case <-ctx.Done():
-			return ctx.Err()
+		if err = pause(ctx, raw.retryAfter); err != nil {
+			return err
 		}
 
-		raw, err = c.FetchRawChallenge(ctx, dnsChallenge.URL, a)
+		raw, err = c.fetchRawChallenge(ctx, dnsChallenge.URL, key)
 	}
 
 	return err
@@ -295,70 +289,86 @@ func cleanup(ctx context.Context, fns []CleanupFunc) error {
 	return nil
 }
 
-func (o *Order) Poll(ctx context.Context, c *Client, a Account) (b []byte, certKey *ecdsa.PrivateKey, err error) {
+func (o *Order) Attempt(ctx context.Context) (b []byte, certKey *ecdsa.PrivateKey, err error) {
 	var (
-		ch   chan error
-		az   Authz
-		auth []Authz
-		url  string
+		key      ES256Key
+		ch       chan error
+		az       Authz
+		auth     []Authz
+		url      string
+		txt      TxtRecord
+		fn       CleanupFunc
+		records  []TxtRecord
+		cleanups []CleanupFunc
+		i        int
+		c        = o.client
+		domains  = slices.Collect(maps.Keys(o.domains))
 	)
+
+	if c == nil {
+		return b, certKey, errors.New("improperly initialized order")
+	}
+
+	if o.account == nil {
+		return b, certKey, errors.New("improperly initialized order")
+	}
+
+	if key = o.account.ES256Key; key.id == "" {
+		return b, certKey, errors.New("improperly initialized order")
+	}
 
 	ctx, cancel := context.WithCancel(ctx)
 
 	defer cancel()
 
-	if auth, err = c.FetchAuthz(ctx, a, *o); err != nil {
+	if auth, err = c.fetchAuthz(ctx, o.Authorizations, key); err != nil {
 		return b, certKey, err
 	}
-
-	ch = make(chan error, len(auth))
-
-	var (
-		records  []TxtRecord
-		cleanups []CleanupFunc
-	)
 
 	defer func() {
 		err = errors.Join(err, cleanup(ctx, cleanups))
 	}()
 
 	for _, az = range auth {
-		var (
-			txt     TxtRecord
-			cleanup CleanupFunc
-		)
-
-		if txt, cleanup, err = c.provisionAuthz(ctx, a, az, o.domains); err != nil {
+		if txt, fn, err = c.provisionAuthz(ctx, key, az, o.domains); err != nil {
 			return b, certKey, err
 		}
 
 		records = append(records, txt)
-		cleanups = append(cleanups, cleanup)
+		cleanups = append(cleanups, fn)
 	}
 
 	for _, txt := range records {
 		waitForDns(ctx, txt.Name, txt.Txt, 5)
 	}
 
+	ch = make(chan error, len(auth))
+
 	for _, az = range auth {
-		go func(ctx context.Context, a Account, az Authz) {
-			ch <- c.validateAuthz(ctx, a, az)
-		}(ctx, a, az)
+		go func(ctx context.Context, key ES256Key, az Authz) {
+			ch <- c.validateAuthz(ctx, key, az)
+		}(ctx, key, az)
 	}
 
-	for range auth {
-		err = errors.Join(err, <-ch)
+	for i = range auth {
+		if err = errors.Join(err, <-ch); err != nil {
+			// cancel pending challenges if there are any
+			// and they have not already been cancelled
+			if ctx.Err() == nil && i != len(auth)-1 {
+				cancel()
+			}
+		}
 	}
 
 	if err != nil {
 		return b, certKey, err
 	}
 
-	if err = c.verifyAuthz(ctx, o.Authorizations, a, 5); err != nil {
+	if err = c.pollForValidAuthz(ctx, o.Authorizations, key, 5); err != nil {
 		return b, certKey, err
 	}
 
-	if err = c.verifyOrderReady(ctx, o, a, 5); err != nil {
+	if err = c.pollForOrderReady(ctx, o.location, key, o, 5); err != nil {
 		return b, certKey, err
 	}
 
@@ -366,20 +376,20 @@ func (o *Order) Poll(ctx context.Context, c *Client, a Account) (b []byte, certK
 		return b, nil, err
 	}
 
-	if err = c.finalize(ctx, a, o, certKey); err != nil {
+	if err = c.finalize(ctx, o.Finalize, domains, key, certKey, o); err != nil {
 		return b, nil, err
 	}
 
-	if url, err = c.awaitURL(ctx, a, o, 5); err != nil {
+	if url, err = c.pollForCertURL(ctx, o.location, key, o, 5); err != nil {
 		return b, nil, err
 	}
 
-	b, err = c.downloadCert(ctx, url, a)
+	b, err = c.downloadCert(ctx, url, key)
 
 	return b, certKey, err
 }
 
-func (c *Client) downloadCert(ctx context.Context, url string, a Account) ([]byte, error) {
+func (c *Client) downloadCert(ctx context.Context, url string, key ES256Key) ([]byte, error) {
 	var (
 		b   []byte
 		err error
@@ -388,7 +398,7 @@ func (c *Client) downloadCert(ctx context.Context, url string, a Account) ([]byt
 		dec *jsontext.Decoder
 	)
 
-	if res, err = c.signedPostAsGet(ctx, url, a.Location, a.ES256Key); err != nil {
+	if res, err = c.signedPostAsGet(ctx, url, key); err != nil {
 		return b, err
 	}
 
@@ -411,7 +421,7 @@ func (c *Client) downloadCert(ctx context.Context, url string, a Account) ([]byt
 
 }
 
-func (c *Client) verifyAuthz(ctx context.Context, urls []string, a Account, retries int) error {
+func (c *Client) pollForValidAuthz(ctx context.Context, urls []string, key ES256Key, retries int) error {
 	var (
 		authz Authz
 		err   error
@@ -419,59 +429,51 @@ func (c *Client) verifyAuthz(ctx context.Context, urls []string, a Account, retr
 		n     = RetryError(retries)
 	)
 
-	for ; retries > 0; retries-- {
+	for i < len(urls) {
 
-		for ; i < len(urls); i++ {
-			if err = c.fetchUnmarshalAuthz(ctx, urls[i], a.Location, a.ES256Key, &authz); err != nil {
-				return err
-			}
-			switch authz.Status {
-			case AuthzStatusValid:
-			case AuthzStatusPending:
-				goto pause
-			case AuthzStatusInvalid:
-				return ErrFailedAuthz
-			default:
-				return UnexpectedAuthzStatusError(authz.Status)
-			}
+		if err = c.fetchUnmarshalAuthz(ctx, urls[i], key, &authz); err != nil {
+			return err
 		}
 
-	pause:
-
-		if i == len(urls) {
-			return nil
+		switch authz.Status {
+		case AuthzStatusValid:
+			i++
+			continue
+		case AuthzStatusPending:
+			retries--
+		case AuthzStatusInvalid:
+			return ErrFailedAuthz
+		default:
+			return UnexpectedAuthzStatusError(authz.Status)
 		}
 
-		if retries == 1 {
-			break
+		if retries--; retries <= 0 {
+			return n
 		}
 
-		select {
-		case <-authz.retryAfter.wait():
-		case <-ctx.Done():
-			return ctx.Err()
+		if err = pause(ctx, authz.retryAfter); err != nil {
+			return err
 		}
 
 	}
 
-	return n
+	return nil
+
 }
 
-func (c *Client) awaitURL(ctx context.Context, a Account, o *Order, retries int) (string, error) {
+func (c *Client) pollForCertURL(ctx context.Context, url string, key ES256Key, out *Order, retries int) (string, error) {
 	var (
 		err error
 		n   = RetryError(retries)
 	)
 
-	for err = c.fetchOrder(ctx, o, a); err == nil && retries > 0; err = c.fetchOrder(ctx, o, a) {
-		if o.CertificateURL != "" {
-			return o.CertificateURL, nil
+	for err = c.fetchOrder(ctx, url, key, out); err == nil && retries > 0; err = c.fetchOrder(ctx, url, key, out) {
+		if out.CertificateURL != "" {
+			return out.CertificateURL, nil
 		}
 
-		select {
-		case <-o.retryAfter.wait():
-		case <-ctx.Done():
-			return "", ctx.Err()
+		if err = pause(ctx, out.retryAfter); err != nil {
+			return "", err
 		}
 
 		retries--
@@ -485,7 +487,7 @@ func (c *Client) awaitURL(ctx context.Context, a Account, o *Order, retries int)
 
 }
 
-func (c *Client) finalize(ctx context.Context, a Account, o *Order, key *ecdsa.PrivateKey) error {
+func (c *Client) finalize(ctx context.Context, url string, domains []string, actKey ES256Key, certKey *ecdsa.PrivateKey, out *Order) error {
 	var (
 		err error
 		csr csr
@@ -494,7 +496,7 @@ func (c *Client) finalize(ctx context.Context, a Account, o *Order, key *ecdsa.P
 		enc = jsontext.NewEncoder(buf)
 	)
 
-	if csr, err = newCSR(key, slices.Collect(maps.Keys(o.domains))); err != nil {
+	if csr, err = newCSR(certKey, domains); err != nil {
 		return err
 	}
 
@@ -504,14 +506,14 @@ func (c *Client) finalize(ctx context.Context, a Account, o *Order, key *ecdsa.P
 
 	b = buf.Bytes()
 
-	if err = c.submitFinalize(ctx, o, a, b); err != nil {
+	if err = c.submitFinalize(ctx, url, actKey, b, out); err != nil {
 		return err
 	}
 
 	return nil
 }
 
-func (c *Client) submitFinalize(ctx context.Context, o *Order, a Account, b []byte) error {
+func (c *Client) submitFinalize(ctx context.Context, url string, key ES256Key, b []byte, out *Order) error {
 	var (
 		res *http.Response
 		err error
@@ -519,7 +521,7 @@ func (c *Client) submitFinalize(ctx context.Context, o *Order, a Account, b []by
 		bad Problem
 	)
 
-	if res, err = c.signedPost(ctx, o.Finalize, a.Location, a.ES256Key, b); err != nil {
+	if res, err = c.signedPost(ctx, url, key, b); err != nil {
 		return err
 	}
 
@@ -538,33 +540,33 @@ func (c *Client) submitFinalize(ctx context.Context, o *Order, a Account, b []by
 		return err
 	}
 
-	err = json.UnmarshalDecode(dec, o)
+	err = json.UnmarshalDecode(dec, out)
 	if err != nil {
 		return err
 	}
 
-	switch o.Status {
+	switch out.Status {
 	case OrderStatusProcessing:
 		// strictly speaking, this is the only valid response
 	case OrderStatusInvalid:
 		return ErrFailedOrder
 	default:
-		return UnexpectedOrderStatusError(o.Status)
+		return UnexpectedOrderStatusError(out.Status)
 	}
 
-	o.retryAfter.parseRetryAfter(res)
+	out.retryAfter.parseRetryAfter(res)
 
 	return nil
 }
 
-func (c *Client) verifyOrderReady(ctx context.Context, o *Order, a Account, retries int) error {
+func (c *Client) pollForOrderReady(ctx context.Context, url string, key ES256Key, out *Order, retries int) error {
 	var (
 		err error
 		n   = RetryError(retries)
 	)
 
-	for err = c.fetchOrder(ctx, o, a); err == nil && retries > 0; err = c.fetchOrder(ctx, o, a) {
-		switch o.Status {
+	for err = c.fetchOrder(ctx, url, key, out); err == nil && retries >= 0; err = c.fetchOrder(ctx, url, key, out) {
+		switch out.Status {
 		case OrderStatusPending:
 			// keep polling
 		case OrderStatusReady:
@@ -572,13 +574,11 @@ func (c *Client) verifyOrderReady(ctx context.Context, o *Order, a Account, retr
 		case OrderStatusInvalid:
 			return ErrFailedOrder
 		default:
-			return UnexpectedOrderStatusError(o.Status)
+			return UnexpectedOrderStatusError(out.Status)
 		}
 
-		select {
-		case <-o.retryAfter.wait():
-		case <-ctx.Done():
-			return ctx.Err()
+		if err = pause(ctx, out.retryAfter); err != nil {
+			return err
 		}
 
 		retries--
@@ -591,7 +591,7 @@ func (c *Client) verifyOrderReady(ctx context.Context, o *Order, a Account, retr
 	return n
 }
 
-func (c *Client) fetchOrder(ctx context.Context, o *Order, a Account) error {
+func (c *Client) fetchOrder(ctx context.Context, url string, key ES256Key, out *Order) error {
 	var (
 		res *http.Response
 		err error
@@ -599,7 +599,7 @@ func (c *Client) fetchOrder(ctx context.Context, o *Order, a Account) error {
 		bad Problem
 	)
 
-	if res, err = c.signedPostAsGet(ctx, o.Location, a.Location, a.ES256Key); err != nil {
+	if res, err = c.signedPostAsGet(ctx, url, key); err != nil {
 		return err
 	}
 
@@ -618,12 +618,12 @@ func (c *Client) fetchOrder(ctx context.Context, o *Order, a Account) error {
 		return err
 	}
 
-	err = json.UnmarshalDecode(dec, o)
+	err = json.UnmarshalDecode(dec, out)
 	if err != nil {
 		return err
 	}
 
-	o.retryAfter.parseRetryAfter(res)
+	out.retryAfter.parseRetryAfter(res)
 
 	return nil
 

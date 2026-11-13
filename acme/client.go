@@ -36,7 +36,7 @@ type Client struct {
 	nonce    string
 }
 
-func (c Client) RequestNonce(ctx context.Context) (string, error) {
+func (c Client) requestNonce(ctx context.Context) (string, error) {
 	var (
 		s   string
 		err error
@@ -66,11 +66,11 @@ type nonceSource struct {
 }
 
 func (n nonceSource) Nonce() (string, error) {
-	return n.client.RequestNonce(n.ctx)
+	return n.client.requestNonce(n.ctx)
 }
 
-func (c Client) jws(ctx context.Context, key ES256Key, url, kid string, payload []byte) (string, error) {
-	embedJWK := kid == ""
+func (c Client) jws(ctx context.Context, url string, key ES256Key, payload []byte) (string, error) {
+	embedJWK := key.id == ""
 
 	opts := jose.SignerOptions{
 		NonceSource: nonceSource{
@@ -87,7 +87,7 @@ func (c Client) jws(ctx context.Context, key ES256Key, url, kid string, payload 
 	// (RFC 8555 section 6.2). KeyID is ignored while EmbedJWK is true.
 	jwk := jose.JSONWebKey{
 		Key:   key.pk,
-		KeyID: kid,
+		KeyID: key.id,
 	}
 
 	signer, err := jose.NewSigner(jose.SigningKey{
@@ -108,7 +108,7 @@ func (c Client) jws(ctx context.Context, key ES256Key, url, kid string, payload 
 	return raw.FullSerialize(), nil
 }
 
-func (c Client) signedPost(ctx context.Context, url, kid string, key ES256Key, payload []byte) (*http.Response, error) {
+func (c Client) signedPost(ctx context.Context, url string, key ES256Key, payload []byte) (*http.Response, error) {
 	var (
 		req *http.Request
 		res *http.Response
@@ -116,7 +116,7 @@ func (c Client) signedPost(ctx context.Context, url, kid string, key ES256Key, p
 		jws string
 	)
 
-	if jws, err = c.jws(ctx, key, url, kid, payload); err != nil {
+	if jws, err = c.jws(ctx, url, key, payload); err != nil {
 		return res, err
 	}
 
@@ -130,8 +130,8 @@ func (c Client) signedPost(ctx context.Context, url, kid string, key ES256Key, p
 	return http.DefaultClient.Do(req)
 }
 
-func (c Client) signedPostAsGet(ctx context.Context, url, kid string, key ES256Key) (*http.Response, error) {
-	return c.signedPost(ctx, url, kid, key, []byte{})
+func (c Client) signedPostAsGet(ctx context.Context, url string, key ES256Key) (*http.Response, error) {
+	return c.signedPost(ctx, url, key, []byte{})
 }
 
 // RequestAccount requests a new or existing account from the ACME server. If the information
@@ -156,13 +156,17 @@ func (c Client) RequestAccount(ctx context.Context, a AccountRequest) (acc Accou
 		return acc, false, err
 	}
 
-	if res, err = c.signedPost(ctx, c.dir.NewAccount, "", a.ES256Key, raw); err != nil {
+	if res, err = c.signedPost(ctx, c.dir.NewAccount, a.ES256Key, raw); err != nil {
 		return acc, false, err
 	}
 
 	defer func() {
 		err = errors.Join(err, res.Body.Close())
 	}()
+
+	if res.StatusCode != http.StatusOK && res.StatusCode != http.StatusCreated {
+		return acc, false, errors.New("server responded with an unexpected status: " + res.Status)
+	}
 
 	dec = jsontext.NewDecoder(res.Body)
 
@@ -185,8 +189,8 @@ func (c Client) NewOrder(ctx context.Context, account Account, order OrderReques
 		dec *jsontext.Decoder
 	)
 
-	if account.Location == "" {
-		return out, errors.New("account location must not be empty")
+	if account.ES256Key.id == "" {
+		return out, errors.New("uninitialized account key")
 	}
 
 	if len(order.Domains) == 0 {
@@ -197,7 +201,7 @@ func (c Client) NewOrder(ctx context.Context, account Account, order OrderReques
 		return out, err
 	}
 
-	if res, err = c.signedPost(ctx, c.dir.NewOrder, account.Location, account.ES256Key, raw); err != nil {
+	if res, err = c.signedPost(ctx, c.dir.NewOrder, account.ES256Key, raw); err != nil {
 		return out, err
 	}
 
@@ -219,15 +223,15 @@ func (c Client) NewOrder(ctx context.Context, account Account, order OrderReques
 		return out, err
 	}
 
-	// The order URL is not in the body; it comes from the Location header.
-	out.Location = res.Header.Get("Location")
-	// pass on the original domains map from the request
+	out.location = res.Header.Get("Location")
 	out.domains = order.Domains
+	out.account = &account
+	out.client = &c
 
 	return out, err
 }
 
-func (c Client) fetchUnmarshalAuthz(ctx context.Context, url, loc string, key ES256Key, out *Authz) error {
+func (c Client) fetchUnmarshalAuthz(ctx context.Context, url string, key ES256Key, out *Authz) error {
 	var (
 		err error
 		res *http.Response
@@ -235,7 +239,7 @@ func (c Client) fetchUnmarshalAuthz(ctx context.Context, url, loc string, key ES
 		bad Problem
 	)
 
-	res, err = c.signedPostAsGet(ctx, url, loc, key)
+	res, err = c.signedPostAsGet(ctx, url, key)
 	if err != nil {
 		return err
 	}
@@ -260,7 +264,7 @@ func (c Client) fetchUnmarshalAuthz(ctx context.Context, url, loc string, key ES
 	return err
 }
 
-func (c Client) fetchChallenge(ctx context.Context, url string, a Account, payload []byte) (RawChallenge, error) {
+func (c Client) fetchChallenge(ctx context.Context, url string, key ES256Key, payload []byte) (RawChallenge, error) {
 	var (
 		out RawChallenge
 		res *http.Response
@@ -269,7 +273,7 @@ func (c Client) fetchChallenge(ctx context.Context, url string, a Account, paylo
 		err error
 	)
 
-	if res, err = c.signedPost(ctx, url, a.Location, a.ES256Key, payload); err != nil {
+	if res, err = c.signedPost(ctx, url, key, payload); err != nil {
 		return out, err
 	}
 
@@ -295,29 +299,29 @@ func (c Client) fetchChallenge(ctx context.Context, url string, a Account, paylo
 	return out, err
 }
 
-// FetchRawChallenge fetches the current state of a challenge without starting
+// fetchRawChallenge fetches the current state of a challenge without starting
 // validation.
-func (c Client) FetchRawChallenge(ctx context.Context, url string, a Account) (RawChallenge, error) {
-	return c.fetchChallenge(ctx, url, a, []byte{})
+func (c Client) fetchRawChallenge(ctx context.Context, url string, key ES256Key) (RawChallenge, error) {
+	return c.fetchChallenge(ctx, url, key, []byte{})
 }
 
-// AcceptChallenge tells the ACME server that the challenge response has been
+// acceptChallenge tells the ACME server that the challenge response has been
 // provisioned and that validation should begin. Per RFC 8555 section 7.5.1,
 // this is a POST with an empty JSON object ("{}") to the challenge URL.
-func (c Client) AcceptChallenge(ctx context.Context, url string, a Account) (RawChallenge, error) {
-	return c.fetchChallenge(ctx, url, a, []byte("{}"))
+func (c Client) acceptChallenge(ctx context.Context, url string, key ES256Key) (RawChallenge, error) {
+	return c.fetchChallenge(ctx, url, key, []byte("{}"))
 }
 
-func (c Client) FetchAuthz(ctx context.Context, a Account, o Order) ([]Authz, error) {
+func (c Client) fetchAuthz(ctx context.Context, urls []string, key ES256Key) ([]Authz, error) {
 	var (
-		out = make([]Authz, len(o.Authorizations))
 		err error
 		i   int
 		url string
+		out = make([]Authz, len(urls))
 	)
 
-	for i, url = range o.Authorizations {
-		if err = c.fetchUnmarshalAuthz(ctx, url, a.Location, a.ES256Key, &out[i]); err != nil {
+	for i, url = range urls {
+		if err = c.fetchUnmarshalAuthz(ctx, url, key, &out[i]); err != nil {
 			return nil, err
 		}
 	}
@@ -347,6 +351,10 @@ func NewClient(ctx context.Context, CADirURL CADirURL) (Client, error) {
 	}()
 
 	dec = jsontext.NewDecoder(res.Body)
+
+	if res.StatusCode != http.StatusOK {
+		return c, errors.New("server responded with an unexpected status: " + res.Status)
+	}
 
 	if err = json.UnmarshalDecode(dec, &c.dir); err != nil {
 		return c, err

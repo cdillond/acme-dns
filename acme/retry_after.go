@@ -1,6 +1,7 @@
 package acme
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"strconv"
@@ -26,8 +27,18 @@ func (r *retryAfter) parseRetryAfter(res *http.Response) {
 	}
 }
 
-func (r *retryAfter) wait() <-chan time.Time {
-	return time.After(time.Until(time.Time(*r)))
+func pause(ctx context.Context, r retryAfter) error {
+	wait := time.Until(time.Time(r))
+	if wait <= 0 {
+		return nil
+	}
+
+	select {
+	case <-time.After(wait):
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
 
 func parseRetryAfterHeader(s string) time.Time {
