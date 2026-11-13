@@ -84,6 +84,12 @@ func (o *OrderStatus) UnmarshalJSONFrom(dec *jsontext.Decoder) error {
 	return nil
 }
 
+type UnexpectedOrderStatusError OrderStatus
+
+func (u UnexpectedOrderStatusError) Error() string {
+	return "unexpected order status: " + OrderStatus(u).String()
+}
+
 type OrderRequest struct {
 	Domains   map[string]Provider
 	NotBefore time.Time
@@ -131,7 +137,7 @@ type Order struct {
 	CertificateURL string              `json:"certificate"`
 	Error          *Problem            `json:"error,omitzero"`
 	domains        map[string]Provider `json:"-"`
-	retryAfter     time.Time           `json:"-"`
+	retryAfter     retryAfter          `json:"-"`
 }
 
 func filterChallenges(src []Challenge) *Challenge {
@@ -207,8 +213,6 @@ func (c *Client) provisionAuthz(ctx context.Context, a Account, az Authz, domain
 		return TxtRecord{}, nil, errors.New("no dns challenge available for Authz")
 	}
 
-	fmt.Printf("\n\ndns challenge\n%#v\n\n", *dnsChallenge)
-
 	n := az.Identifier.Value
 	if az.Wildcard {
 		n = "*." + n
@@ -216,7 +220,6 @@ func (c *Client) provisionAuthz(ctx context.Context, a Account, az Authz, domain
 
 	p := domains[n]
 	if p == nil {
-		fmt.Println(az)
 		return TxtRecord{}, nil, errors.New("could not find registered provider")
 	}
 
@@ -248,29 +251,25 @@ func (c *Client) validateAuthz(ctx context.Context, a Account, az Authz) error {
 		return err
 	}
 
-	for err == nil && !raw.Status.isDone() {
-		wait := time.Until(raw.RetryAfter)
-		if wait > 0 {
-			select {
-			case <-time.After(wait):
-			case <-ctx.Done():
-				return ctx.Err()
-			}
+	for err == nil {
+		switch raw.Status {
+		case ChallengeStatusProcessing:
+			// keep polling
+		case ChallengeStatusValid:
+			return nil
+		case ChallengeStatusInvalid:
+			return ErrFailedChallenge
+		default:
+			return UnexpectedChallengeStatusError(raw.Status)
 		}
+
+		select {
+		case <-raw.retryAfter.wait():
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+
 		raw, err = c.FetchRawChallenge(ctx, dnsChallenge.URL, a)
-	}
-
-	fmt.Printf("\n\nrc: %#v\n", raw)
-
-	if err != nil {
-		return err
-	}
-
-	switch raw.Status {
-	case challengeStatusUnknown:
-		err = errors.New("bad challenge status")
-	case ChallengeStatusInvalid:
-		err = errors.New("challenge failed")
 	}
 
 	return err
@@ -371,7 +370,7 @@ func (o *Order) Poll(ctx context.Context, c *Client, a Account) (b []byte, certK
 		return b, nil, err
 	}
 
-	if url, err = c.awaitURL(ctx, a, o, 6); err != nil {
+	if url, err = c.awaitURL(ctx, a, o, 5); err != nil {
 		return b, nil, err
 	}
 
@@ -416,47 +415,61 @@ func (c *Client) verifyAuthz(ctx context.Context, urls []string, a Account, retr
 	var (
 		authz Authz
 		err   error
+		i     int
+		n     = RetryError(retries)
 	)
 
-start:
-	if retries <= 0 {
-		return errors.New("could not validate all authz")
-	}
+	for ; retries > 0; retries-- {
 
-	for _, u := range urls {
-		err = c.fetchUnmarshalAuthz(ctx, u, a.Location, a.ES256Key, &authz)
-		if err != nil {
-			return err
-		}
-		switch authz.Status {
-		case AuthzStatusValid:
-		case AuthzStatusPending:
-			select {
-			case <-ctx.Done():
-				return ctx.Err()
-			case <-time.After(time.Until(authz.retryAfter)):
-				retries--
+		for ; i < len(urls); i++ {
+			if err = c.fetchUnmarshalAuthz(ctx, urls[i], a.Location, a.ES256Key, &authz); err != nil {
+				return err
 			}
-			goto start
-		case authzStatusUnknown:
-			return errors.New("fecks")
-		default:
-			return errors.New("feck")
+			switch authz.Status {
+			case AuthzStatusValid:
+			case AuthzStatusPending:
+				goto pause
+			case AuthzStatusInvalid:
+				return ErrFailedAuthz
+			default:
+				return UnexpectedAuthzStatusError(authz.Status)
+			}
 		}
+
+	pause:
+
+		if i == len(urls) {
+			return nil
+		}
+
+		if retries == 1 {
+			break
+		}
+
+		select {
+		case <-authz.retryAfter.wait():
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+
 	}
 
-	return nil
+	return n
 }
 
 func (c *Client) awaitURL(ctx context.Context, a Account, o *Order, retries int) (string, error) {
-	var err error
+	var (
+		err error
+		n   = RetryError(retries)
+	)
 
 	for err = c.fetchOrder(ctx, o, a); err == nil && retries > 0; err = c.fetchOrder(ctx, o, a) {
 		if o.CertificateURL != "" {
 			return o.CertificateURL, nil
 		}
+
 		select {
-		case <-time.After(time.Until(o.retryAfter)):
+		case <-o.retryAfter.wait():
 		case <-ctx.Done():
 			return "", ctx.Err()
 		}
@@ -468,7 +481,7 @@ func (c *Client) awaitURL(ctx context.Context, a Account, o *Order, retries int)
 		return "", err
 	}
 
-	return "", errors.New("retries exhausted")
+	return "", n
 
 }
 
@@ -531,63 +544,51 @@ func (c *Client) submitFinalize(ctx context.Context, o *Order, a Account, b []by
 	}
 
 	switch o.Status {
-	case OrderStatusPending:
-		// this should not happen because it means not all authz are complete
-		return errors.New("not all authz recognized as complete")
-	case OrderStatusReady:
-		// this should not happen because the finalize request has been received
-		// in any case, we will treat this as a recoverable server error
 	case OrderStatusProcessing:
 		// strictly speaking, this is the only valid response
-	case OrderStatusValid:
-		// for lets encrypt, this an error will be returned instead of a valid
-		// order, but we'll treat it as recoverable, since we aren't implementing
-		// a strict state machine
 	case OrderStatusInvalid:
-		return errors.New("order failed")
+		return ErrFailedOrder
 	default:
-		return errors.New("unknown order status")
+		return UnexpectedOrderStatusError(o.Status)
 	}
 
-	o.retryAfter = parseRetryAfterHeader(res.Header.Get("Retry-After"))
-	if o.retryAfter.IsZero() {
-		o.retryAfter = time.Now().Add(DefaultInterval)
-	}
+	o.retryAfter.parseRetryAfter(res)
 
 	return nil
 }
 
 func (c *Client) verifyOrderReady(ctx context.Context, o *Order, a Account, retries int) error {
-	var err error
+	var (
+		err error
+		n   = RetryError(retries)
+	)
 
-	for err = c.fetchOrder(ctx, o, a); err == nil && retries > 0; retries-- {
+	for err = c.fetchOrder(ctx, o, a); err == nil && retries > 0; err = c.fetchOrder(ctx, o, a) {
 		switch o.Status {
 		case OrderStatusPending:
 			// keep polling
 		case OrderStatusReady:
 			return nil
-		case OrderStatusProcessing:
-			return errors.New("finalize already called")
-		case OrderStatusValid:
-			return errors.New("finalize already called")
 		case OrderStatusInvalid:
-			return errors.New("order failed")
+			return ErrFailedOrder
 		default:
-			return errors.New("uknown order status")
+			return UnexpectedOrderStatusError(o.Status)
 		}
 
 		select {
-		case <-time.After(time.Until(o.retryAfter)):
+		case <-o.retryAfter.wait():
 		case <-ctx.Done():
 			return ctx.Err()
 		}
+
+		retries--
 	}
 
 	if err != nil {
 		return err
 	}
 
-	return errors.New("retries exhausted")
+	return n
 }
 
 func (c *Client) fetchOrder(ctx context.Context, o *Order, a Account) error {
@@ -622,26 +623,7 @@ func (c *Client) fetchOrder(ctx context.Context, o *Order, a Account) error {
 		return err
 	}
 
-	switch o.Status {
-	case OrderStatusPending:
-		return errors.New("not all authz recognized as complete")
-	case OrderStatusReady:
-	case OrderStatusProcessing:
-	case OrderStatusValid:
-		if o.CertificateURL == "" {
-			return errors.New("order validated, but no certificate URL was provided")
-		}
-		return nil
-	case OrderStatusInvalid:
-		return errors.New("order failed")
-	default:
-		return errors.New("unknown order status")
-	}
-
-	o.retryAfter = parseRetryAfterHeader(res.Header.Get("Retry-After"))
-	if o.retryAfter.IsZero() {
-		o.retryAfter = time.Now().Add(DefaultInterval)
-	}
+	o.retryAfter.parseRetryAfter(res)
 
 	return nil
 

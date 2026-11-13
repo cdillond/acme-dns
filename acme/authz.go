@@ -7,13 +7,26 @@ import (
 	"time"
 )
 
+type FailedError string
+
+func (f FailedError) Error() string {
+	return "failed: " + string(f)
+}
+
+const (
+	ErrFailedAccount   FailedError = "account"
+	ErrFailedOrder     FailedError = "order"
+	ErrFailedAuthz     FailedError = "authz"
+	ErrFailedChallenge FailedError = "challenge"
+)
+
 type Authz struct {
 	Identifier Identifier  `json:"identifier"`
 	Status     AuthzStatus `json:"status"`
 	Expires    time.Time   `json:"expires,omitzero"`
 	Challenges []Challenge `json:"challenges"`
 	Wildcard   bool        `json:"wildcard"`
-	retryAfter time.Time   `json:"-"`
+	retryAfter retryAfter  `json:"-"`
 }
 
 type AuthzStatus uint32
@@ -77,4 +90,10 @@ func (a *AuthzStatus) UnmarshalJSONFrom(dec *jsontext.Decoder) error {
 	*a = NewAuthzStatus(s)
 
 	return nil
+}
+
+type UnexpectedAuthzStatusError AuthzStatus
+
+func (u UnexpectedAuthzStatusError) Error() string {
+	return "unexpected authz status: " + AuthzStatus(u).String()
 }

@@ -6,9 +6,7 @@ import (
 	"encoding/json/v2"
 	"errors"
 	"net/http"
-	"strconv"
 	"strings"
-	"time"
 
 	"github.com/go-jose/go-jose/v4"
 )
@@ -256,36 +254,10 @@ func (c Client) fetchUnmarshalAuthz(ctx context.Context, url, loc string, key ES
 		err = &bad
 	} else {
 		err = json.UnmarshalDecode(dec, out)
-
-		out.retryAfter = parseRetryAfterHeader(res.Header.Get("Retry-After"))
-		if out.retryAfter.IsZero() {
-			out.retryAfter = time.Now().Add(DefaultInterval)
-		}
+		out.retryAfter.parseRetryAfter(res)
 	}
 
 	return err
-}
-
-func parseRetryAfterHeader(s string) time.Time {
-	var (
-		t   time.Time
-		n   int64
-		err error
-	)
-	if s == "" {
-		return t
-	}
-	// implemented either as a non-negative number of seconds OR a date time
-	if n, err = strconv.ParseInt(s, 10, 64); err == nil {
-		if n < 0 {
-			return t
-		}
-		return time.Now().Add(time.Duration(n) * time.Second)
-	}
-
-	t, _ = time.Parse(http.TimeFormat, s)
-
-	return t
 }
 
 func (c Client) fetchChallenge(ctx context.Context, url string, a Account, payload []byte) (RawChallenge, error) {
@@ -316,12 +288,7 @@ func (c Client) fetchChallenge(ctx context.Context, url string, a Account, paylo
 	} else {
 		err = json.UnmarshalDecode(dec, &out)
 		if err == nil {
-			out.RetryAfter = parseRetryAfterHeader(
-				res.Header.Get("Retry-After"),
-			)
-			if out.RetryAfter.IsZero() {
-				out.RetryAfter = time.Now().Add(DefaultInterval)
-			}
+			out.retryAfter.parseRetryAfter(res)
 		}
 	}
 
