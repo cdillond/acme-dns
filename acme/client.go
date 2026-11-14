@@ -1,14 +1,13 @@
 package acme
 
 import (
+	"bytes"
 	"context"
 	"encoding/json/jsontext"
 	"encoding/json/v2"
 	"errors"
 	"net/http"
 	"strings"
-
-	"github.com/go-jose/go-jose/v4"
 )
 
 /*
@@ -60,52 +59,28 @@ func (c Client) requestNonce(ctx context.Context) (string, error) {
 	return s, err
 }
 
-type nonceSource struct {
-	ctx    context.Context
-	client *Client
-}
-
-func (n nonceSource) Nonce() (string, error) {
-	return n.client.requestNonce(n.ctx)
-}
-
 func (c Client) jws(ctx context.Context, url string, key ES256Key, payload []byte) (string, error) {
-	embedJWK := key.id == ""
-
-	opts := jose.SignerOptions{
-		NonceSource: nonceSource{
-			ctx:    ctx,
-			client: &c,
-		},
-		EmbedJWK: embedJWK,
-		ExtraHeaders: map[jose.HeaderKey]any{
-			"url": url,
-		}}
-
-	// go-jose embeds the public key when EmbedJWK is true and otherwise emits
-	// KeyID as the "kid" header, matching ACME's jwk/kid mutual exclusion
-	// (RFC 8555 section 6.2). KeyID is ignored while EmbedJWK is true.
-	jwk := jose.JSONWebKey{
-		Key:   key.pk,
-		KeyID: key.id,
-	}
-
-	signer, err := jose.NewSigner(jose.SigningKey{
-		Algorithm: jose.ES256,
-		Key:       jwk,
-	}, &opts,
+	var (
+		nonce string
+		err   error
+		dto   jwsDto
+		buf   = new(bytes.Buffer)
+		enc   = jsontext.NewEncoder(buf)
 	)
 
-	if err != nil {
+	if nonce, err = c.requestNonce(ctx); err != nil {
 		return "", err
 	}
 
-	raw, err := signer.Sign(payload)
-	if err != nil {
+	if dto, err = sign(url, key, payload, nonce); err != nil {
 		return "", err
 	}
 
-	return raw.FullSerialize(), nil
+	if err = json.MarshalEncode(enc, dto); err != nil {
+		return "", err
+	}
+
+	return buf.String(), nil
 }
 
 func (c Client) signedPost(ctx context.Context, url string, key ES256Key, payload []byte) (*http.Response, error) {

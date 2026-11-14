@@ -1,11 +1,8 @@
 package acme
 
 import (
-	"crypto"
 	"crypto/ecdsa"
 	"crypto/elliptic"
-
-	"github.com/go-jose/go-jose/v4"
 )
 
 type ES256Key struct {
@@ -19,22 +16,20 @@ func (e ES256Key) Bytes() ([]byte, error) {
 }
 
 func newE256KeyFromECDSA(pk *ecdsa.PrivateKey) (ES256Key, error) {
-	jwk := jose.JSONWebKey{
-		Key: pk,
-	}
+	key := ES256Key{pk: pk}
 
-	pub := jwk.Public()
-
-	thumbprint, err := pub.Thumbprint(crypto.SHA256)
-
+	jwk, err := key.jwk()
 	if err != nil {
 		return ES256Key{}, err
 	}
 
-	return ES256Key{
-		pk:         pk,
-		thumbprint: thumbprint,
-	}, nil
+	thumbprint, err := jwk.thumbprint()
+	if err != nil {
+		return ES256Key{}, err
+	}
+	key.thumbprint = thumbprint[:]
+
+	return key, nil
 }
 
 func NewE256Key() (ES256Key, error) {

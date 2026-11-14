@@ -2,13 +2,10 @@ package acme
 
 import (
 	"bytes"
-	"crypto"
 	"encoding/json/jsontext"
 	"errors"
 	"slices"
 	"time"
-
-	"github.com/go-jose/go-jose/v4"
 )
 
 type ExternalAccountBinding jsontext.Value
@@ -102,7 +99,7 @@ func NewAccountRequest(contacts []string, key ES256Key) AccountRequest {
 }
 
 type accountResponse struct {
-	Key                    jose.JSONWebKey         `json:"key"`
+	Key                    JWK                     `json:"key"`
 	Status                 AccountStatus           `json:"status"`
 	CreatedAt              time.Time               `json:"createdAt"`
 	Contact                *[]string               `json:"contact"`
@@ -116,11 +113,11 @@ func newAccount(req AccountRequest, res accountResponse, loc string) (Account, e
 		return Account{}, errors.New("invalid location")
 	}
 
-	thumb, err := res.Key.Thumbprint(crypto.SHA256)
+	thumb, err := res.Key.thumbprint()
 	if err != nil {
 		return Account{}, err
 	}
-	if !bytes.Equal(req.ES256Key.thumbprint, thumb) {
+	if !bytes.Equal(req.ES256Key.thumbprint, thumb[:]) {
 		return Account{}, errors.New("returned key does not match expected thumbprint")
 	}
 	if res.Status == accountStatusUnspecified || !res.Status.isValid() {
