@@ -34,10 +34,6 @@ const (
 	challengeStatusUnknown
 )
 
-func (c ChallengeStatus) isValid() bool {
-	return c < challengeStatusUnknown
-}
-
 var challengeStrings = [challengeStatusUnknown]string{
 	"invalid",
 	"pending",
@@ -53,11 +49,6 @@ func NewChallengeStatus(s string) ChallengeStatus {
 	}
 
 	return ChallengeStatus(n)
-}
-
-// returns true if c is a terminal status (i.e., not processing or pending)
-func (c ChallengeStatus) isDone() bool {
-	return !(c == ChallengeStatusPending || c == ChallengeStatusProcessing)
 }
 
 func (c ChallengeStatus) String() string {

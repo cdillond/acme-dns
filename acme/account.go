@@ -99,7 +99,7 @@ func NewAccountRequest(contacts []string, key ES256Key) AccountRequest {
 }
 
 type accountResponse struct {
-	Key                    JWK                     `json:"key"`
+	Key                    jwk                     `json:"key"`
 	Status                 AccountStatus           `json:"status"`
 	CreatedAt              time.Time               `json:"createdAt"`
 	Contact                *[]string               `json:"contact"`
@@ -113,11 +113,11 @@ func newAccount(req AccountRequest, res accountResponse, loc string) (Account, e
 		return Account{}, errors.New("invalid location")
 	}
 
-	thumb, err := res.Key.thumbprint()
+	thumb, err := res.Key.appendThumbprint(make([]byte, 0, 32))
 	if err != nil {
 		return Account{}, err
 	}
-	if !bytes.Equal(req.ES256Key.thumbprint, thumb[:]) {
+	if !bytes.Equal(req.ES256Key.thumbprint, thumb) {
 		return Account{}, errors.New("returned key does not match expected thumbprint")
 	}
 	if res.Status == accountStatusUnspecified || !res.Status.isValid() {
@@ -144,7 +144,6 @@ func newAccount(req AccountRequest, res accountResponse, loc string) (Account, e
 			pk:         req.pk,
 			thumbprint: req.thumbprint,
 		},
-		//Location:               loc,
 		CreatedAt:              res.CreatedAt,
 		Status:                 res.Status,
 		Contact:                contact,
@@ -155,8 +154,7 @@ func newAccount(req AccountRequest, res accountResponse, loc string) (Account, e
 }
 
 type Account struct {
-	ES256Key ES256Key `json:"-"`
-	//Location               string                 `json:"-"`
+	ES256Key               ES256Key               `json:"-"`
 	CreatedAt              time.Time              `json:"createdAt"`
 	Status                 AccountStatus          `json:"status"`
 	Contact                []string               `json:"contact"`

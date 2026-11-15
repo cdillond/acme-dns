@@ -1,8 +1,6 @@
 package acme
 
 import (
-	"bytes"
-	"encoding/json/jsontext"
 	"encoding/json/v2"
 	"fmt"
 )
@@ -23,15 +21,9 @@ type Subproblem struct {
 }
 
 func (p *Problem) Error() string {
-	buf := new(bytes.Buffer)
-
-	err := json.MarshalEncode(
-		jsontext.NewEncoder(buf),
-		p,
-	)
+	b, err := json.Marshal(p)
 	if err != nil {
 		return fmt.Sprintf("%#v", *p)
 	}
-
-	return buf.String()
+	return string(b)
 }

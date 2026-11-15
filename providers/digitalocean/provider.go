@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"strings"
 
@@ -86,12 +87,18 @@ func (p *Provider) do(ctx context.Context, method, url string, body io.Reader) (
 
 func (p *Provider) deprovision(ctx context.Context, id int) error {
 	var (
-		err error
-		url string
-		res *http.Response
-		bad ErrorResponse
-		dec *jsontext.Decoder
+		err    error
+		url    string
+		res    *http.Response
+		bad    ErrorResponse
+		dec    *jsontext.Decoder
+		log, _ = ctx.Value(acme.LogKey{}).(*slog.Logger)
 	)
+
+	if log != nil {
+		log = log.With("provider", "digitalocean", "record_id", id)
+		log.Info("deprovisioning dns record")
+	}
 
 	url = fmt.Sprintf("%s/%s/records/%d", BaseUrl, p.baseDomain, id)
 
@@ -113,6 +120,10 @@ func (p *Provider) deprovision(ctx context.Context, id int) error {
 		return err
 	}
 
+	if log != nil {
+		log.Info("deprovisioned dns record")
+	}
+
 	return nil
 }
 
@@ -127,12 +138,18 @@ func (p *Provider) Provision(ctx context.Context, txt acme.TxtRecord) (acme.Clea
 		d   = domainRecordEditRequest{
 			Type: "TXT",
 			Name: txt.Name,
-			Data: txt.Txt,
+			Data: txt.Value,
 			TTL:  int(txt.TTL),
 		}
-		buf = new(bytes.Buffer)
-		enc = jsontext.NewEncoder(buf)
+		buf    = new(bytes.Buffer)
+		enc    = jsontext.NewEncoder(buf)
+		log, _ = ctx.Value(acme.LogKey{}).(*slog.Logger)
 	)
+
+	if log != nil {
+		log = log.With("provider", "digitalocean", "record", txt)
+		log.Info("provisioning dns record")
+	}
 
 	d.Name, _ = strings.CutSuffix(d.Name, "."+p.baseDomain)
 
@@ -162,10 +179,11 @@ func (p *Provider) Provision(ctx context.Context, txt acme.TxtRecord) (acme.Clea
 		return nil, err
 	}
 
-	fmt.Printf("\n\nans\n%#v\n", ans)
+	if log != nil {
+		log.Info("provisioned dns record", "record_id", ans.ID)
+	}
 
 	return func(c context.Context) error {
-		fmt.Println("deprovisioning")
 		return p.deprovision(c, ans.ID)
 	}, nil
 }

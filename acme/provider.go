@@ -6,7 +6,10 @@ import (
 
 type CleanupFunc func(context.Context) error
 
-// A Provider updates a DNS record.
+// A [Provider] updates a DNS record for a domain.
+// If a [Client]'s [Client.Logger] field is non-nil, it will pass the logger to the
+// [Provider] via the [context.Context], keyed with an empty [LogKey], when calling
+// [Provider.Provision] and the returned [CleanupFunc].
 type Provider interface {
 	Provision(context.Context, TxtRecord) (CleanupFunc, error)
 }

@@ -6,8 +6,8 @@ import (
 	"encoding/json/jsontext"
 	"encoding/json/v2"
 	"errors"
+	"log/slog"
 	"net/http"
-	"strings"
 )
 
 /*
@@ -31,6 +31,7 @@ const (
 
 type Client struct {
 	CADirURL CADirURL
+	Log      *slog.Logger
 	dir      acmeDirectory
 	nonce    string
 }
@@ -59,28 +60,27 @@ func (c Client) requestNonce(ctx context.Context) (string, error) {
 	return s, err
 }
 
-func (c Client) jws(ctx context.Context, url string, key ES256Key, payload []byte) (string, error) {
+func (c Client) jws(ctx context.Context, url string, key ES256Key, payload []byte) ([]byte, error) {
 	var (
 		nonce string
 		err   error
 		dto   jwsDto
-		buf   = new(bytes.Buffer)
-		enc   = jsontext.NewEncoder(buf)
+		b     []byte
 	)
 
 	if nonce, err = c.requestNonce(ctx); err != nil {
-		return "", err
+		return b, err
 	}
 
 	if dto, err = sign(url, key, payload, nonce); err != nil {
-		return "", err
+		return b, err
 	}
 
-	if err = json.MarshalEncode(enc, dto); err != nil {
-		return "", err
+	if b, err = json.Marshal(&dto); err != nil {
+		return b, err
 	}
 
-	return buf.String(), nil
+	return b, err
 }
 
 func (c Client) signedPost(ctx context.Context, url string, key ES256Key, payload []byte) (*http.Response, error) {
@@ -88,14 +88,14 @@ func (c Client) signedPost(ctx context.Context, url string, key ES256Key, payloa
 		req *http.Request
 		res *http.Response
 		err error
-		jws string
+		jws []byte
 	)
 
 	if jws, err = c.jws(ctx, url, key, payload); err != nil {
 		return res, err
 	}
 
-	if req, err = http.NewRequest(http.MethodPost, url, strings.NewReader(jws)); err != nil {
+	if req, err = http.NewRequest(http.MethodPost, url, bytes.NewReader(jws)); err != nil {
 		return res, err
 	}
 
@@ -304,7 +304,7 @@ func (c Client) fetchAuthz(ctx context.Context, urls []string, key ES256Key) ([]
 	return out, nil
 }
 
-func NewClient(ctx context.Context, CADirURL CADirURL) (Client, error) {
+func NewClient(ctx context.Context, CADirURL CADirURL, log *slog.Logger) (Client, error) {
 	var (
 		c   Client
 		err error
@@ -336,6 +336,7 @@ func NewClient(ctx context.Context, CADirURL CADirURL) (Client, error) {
 	}
 
 	c.CADirURL = CADirURL
+	c.Log = log
 
 	return c, nil
 }

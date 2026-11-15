@@ -41,10 +41,6 @@ const (
 	authzStatusUnknown
 )
 
-func (a AuthzStatus) isValid() bool {
-	return a < authzStatusUnknown
-}
-
 var authzStrings = [authzStatusUnknown]string{
 	"invalid",
 	"pending",

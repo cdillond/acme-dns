@@ -16,18 +16,21 @@ func (e ES256Key) Bytes() ([]byte, error) {
 }
 
 func newE256KeyFromECDSA(pk *ecdsa.PrivateKey) (ES256Key, error) {
-	key := ES256Key{pk: pk}
+	var (
+		err error
+		jwk jwk
+		key = ES256Key{
+			pk: pk,
+		}
+	)
 
-	jwk, err := key.jwk()
-	if err != nil {
+	if jwk, err = key.jwk(); err != nil {
 		return ES256Key{}, err
 	}
 
-	thumbprint, err := jwk.thumbprint()
-	if err != nil {
+	if key.thumbprint, err = jwk.appendThumbprint(key.thumbprint); err != nil {
 		return ES256Key{}, err
 	}
-	key.thumbprint = thumbprint[:]
 
 	return key, nil
 }

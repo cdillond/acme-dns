@@ -9,8 +9,8 @@ import (
 	"encoding/json/jsontext"
 	"encoding/json/v2"
 	"errors"
-	"fmt"
 	"io"
+	"log/slog"
 	"maps"
 	"net"
 	"net/http"
@@ -154,53 +154,66 @@ func defaultCleanupFn(ctx context.Context) error {
 	return nil
 }
 
-func checkResolver(ctx context.Context, domain, targ string) (bool, error) {
-	r := net.Resolver{
-		PreferGo: true,
-	}
-	s, err := r.LookupTXT(ctx, domain)
-	if err != nil {
-		fmt.Println(err)
+type DNSConfirmationFunc func(context.Context, TxtRecord) (bool, error)
+
+func confirmTXT(ctx context.Context, record TxtRecord) (bool, error) {
+	var (
+		s   []string
+		err error
+	)
+
+	if s, err = (&net.Resolver{PreferGo: true}).LookupTXT(ctx, record.Name); err != nil {
 		return false, err
 	}
 
-	fmt.Println(s)
-	if slices.Contains(s, targ) {
-		fmt.Println("found!", s)
-		return true, nil
-	}
-	return false, nil
+	return slices.Contains(s, record.Value), nil
 }
 
-func waitForDns(ctx context.Context, domain, targ string, retries int) {
-	found, err := checkResolver(ctx, domain, targ)
-	if err != nil {
-		return
+func pollForDNS(ctx context.Context, record TxtRecord, fn DNSConfirmationFunc, retries int) error {
+	var (
+		err       error
+		dnsErr    *net.DNSError
+		ok, found bool
+		n         = RetryError(retries)
+		log, _    = ctx.Value(LogKey{}).(*slog.Logger)
+	)
+
+	if log != nil {
+		log = log.With("record", record)
+		log.Info("querying dns")
 	}
-	if found {
-		return
+
+	if fn == nil {
+		fn = confirmTXT
 	}
 
-	fmt.Println("waiting")
-	ticker := time.NewTicker(5 * time.Second)
-
-	for ; retries > 0; retries-- {
-		select {
-		case <-ticker.C:
-			found, err = checkResolver(ctx, domain, targ)
-			if err != nil {
-				return
+	for ; retries >= 0; retries-- {
+		if found, err = fn(ctx, record); err != nil {
+			if dnsErr, ok = errors.AsType[*net.DNSError](err); ok {
+				switch {
+				case dnsErr.IsNotFound, dnsErr.IsTemporary:
+				default:
+					return err
+				}
+			} else {
+				return err
 			}
-			if found {
-				return
-			}
-			fmt.Println("waiting...", retries)
+		}
 
-		case <-ctx.Done():
-			return
+		if found {
+			return nil
+		}
+
+		if retries > 0 {
+			select {
+			case <-time.After(DefaultInterval):
+			case <-ctx.Done():
+				return ctx.Err()
+			}
 		}
 	}
-	fmt.Println("out of retries")
+
+	return n
 }
 
 func (c *Client) provisionAuthz(ctx context.Context, key ES256Key, az Authz, domains map[string]Provider) (TxtRecord, CleanupFunc, error) {
@@ -220,12 +233,12 @@ func (c *Client) provisionAuthz(ctx context.Context, key ES256Key, az Authz, dom
 	}
 
 	txt := TxtRecord{
-		TTL:  DefaultTTL,
-		Name: "_acme-challenge." + az.Identifier.Value,
-		Txt:  newDNS01Txt(dnsChallenge.Token, key),
+		TTL:   DefaultTTL,
+		Name:  "_acme-challenge." + az.Identifier.Value,
+		Value: newDNS01Txt(dnsChallenge.Token, key),
 	}
 
-	cleanup, err := p.Provision(ctx, txt)
+	cleanup, err := p.Provision(withLogger(ctx, c.Log), txt)
 	if err != nil {
 		return TxtRecord{}, nil, err
 	}
@@ -237,15 +250,18 @@ func (c *Client) provisionAuthz(ctx context.Context, key ES256Key, az Authz, dom
 }
 
 func (c *Client) validateAuthz(ctx context.Context, key ES256Key, az Authz) error {
-	dnsChallenge := filterChallenges(az.Challenges)
-	if dnsChallenge == nil {
+	var (
+		dns *Challenge
+		raw RawChallenge
+		err error
+	)
+
+	dns = filterChallenges(az.Challenges)
+	if dns == nil {
 		return errors.New("no dns challenge available for Authz")
 	}
 
-	raw, err := c.acceptChallenge(ctx, dnsChallenge.URL, key)
-	if err != nil {
-		return err
-	}
+	raw, err = c.acceptChallenge(ctx, dns.URL, key)
 
 	for err == nil {
 		switch raw.Status {
@@ -263,7 +279,7 @@ func (c *Client) validateAuthz(ctx context.Context, key ES256Key, az Authz) erro
 			return err
 		}
 
-		raw, err = c.fetchRawChallenge(ctx, dnsChallenge.URL, key)
+		raw, err = c.fetchRawChallenge(ctx, dns.URL, key)
 	}
 
 	return err
@@ -289,12 +305,16 @@ func cleanup(ctx context.Context, fns []CleanupFunc) error {
 	return nil
 }
 
-func (o *Order) Attempt(ctx context.Context) (b []byte, certKey *ecdsa.PrivateKey, err error) {
+type AttemptCfg struct {
+	DnsConfirmation DNSConfirmationFunc
+}
+
+func (o *Order) Attempt(ctx context.Context, cfg AttemptCfg) (b []byte, certKey *ecdsa.PrivateKey, err error) {
 	var (
 		key      ES256Key
 		ch       chan error
 		az       Authz
-		auth     []Authz
+		auths    []Authz
 		url      string
 		txt      TxtRecord
 		fn       CleanupFunc
@@ -321,15 +341,15 @@ func (o *Order) Attempt(ctx context.Context) (b []byte, certKey *ecdsa.PrivateKe
 
 	defer cancel()
 
-	if auth, err = c.fetchAuthz(ctx, o.Authorizations, key); err != nil {
+	if auths, err = c.fetchAuthz(ctx, o.Authorizations, key); err != nil {
 		return b, certKey, err
 	}
 
 	defer func() {
-		err = errors.Join(err, cleanup(ctx, cleanups))
+		err = errors.Join(err, cleanup(withLogger(ctx, c.Log), cleanups))
 	}()
 
-	for _, az = range auth {
+	for _, az = range auths {
 		if txt, fn, err = c.provisionAuthz(ctx, key, az, o.domains); err != nil {
 			return b, certKey, err
 		}
@@ -338,23 +358,25 @@ func (o *Order) Attempt(ctx context.Context) (b []byte, certKey *ecdsa.PrivateKe
 		cleanups = append(cleanups, fn)
 	}
 
-	for _, txt := range records {
-		waitForDns(ctx, txt.Name, txt.Txt, 5)
+	for _, txt = range records {
+		if err = pollForDNS(ctx, txt, cfg.DnsConfirmation, 5); err != nil {
+			return b, certKey, err
+		}
 	}
 
-	ch = make(chan error, len(auth))
+	ch = make(chan error, len(auths))
 
-	for _, az = range auth {
+	for _, az = range auths {
 		go func(ctx context.Context, key ES256Key, az Authz) {
 			ch <- c.validateAuthz(ctx, key, az)
 		}(ctx, key, az)
 	}
 
-	for i = range auth {
+	for i = range auths {
 		if err = errors.Join(err, <-ch); err != nil {
 			// cancel pending challenges if there are any
 			// and they have not already been cancelled
-			if ctx.Err() == nil && i != len(auth)-1 {
+			if ctx.Err() == nil && i != len(auths)-1 {
 				cancel()
 			}
 		}
