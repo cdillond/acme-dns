@@ -81,7 +81,7 @@ func (a *AccountStatus) UnmarshalJSONFrom(dec *jsontext.Decoder) error {
 }
 
 type AccountCfg struct {
-	AccountKey             `json:"-"`
+	AccountKey             AccountKey             `json:"-"`
 	Contact                []string               `json:"contact,omitempty"`
 	TermsOfServiceAgreed   bool                   `json:"termsOfServiceAgreed"`
 	OnlyReturnExisting     bool                   `json:"onlyReturnExisting"`
@@ -117,7 +117,7 @@ func newAccount(req AccountCfg, res accountResponse, loc string) (Account, error
 	if err != nil {
 		return Account{}, err
 	}
-	if !bytes.Equal(req.es256Key.thumbprint, thumb) {
+	if !bytes.Equal(req.AccountKey.es256Key.thumbprint, thumb) {
 		return Account{}, errors.New("returned key does not match expected thumbprint")
 	}
 	if res.Status == accountStatusUnspecified || !res.Status.isValid() {
@@ -140,8 +140,8 @@ func newAccount(req AccountCfg, res accountResponse, loc string) (Account, error
 
 	return Account{
 		id:                     loc,
-		pk:                     req.pk,
-		thumbprint:             req.thumbprint,
+		pk:                     req.AccountKey.pk,
+		thumbprint:             req.AccountKey.thumbprint,
 		CreatedAt:              res.CreatedAt,
 		Status:                 res.Status,
 		Contact:                contact,

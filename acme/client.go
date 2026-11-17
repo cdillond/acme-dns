@@ -135,7 +135,7 @@ func (c Client) RequestAccount(ctx context.Context, a AccountCfg) (acc Account, 
 		return acc, false, err
 	}
 
-	if res, err = c.signedPost(ctx, c.dir.NewAccount, a.es256Key, raw); err != nil {
+	if res, err = c.signedPost(ctx, c.dir.NewAccount, a.AccountKey.es256Key, raw); err != nil {
 		return acc, false, err
 	}
 
