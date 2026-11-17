@@ -139,9 +139,10 @@ func newAccount(req AccountCfg, res accountResponse, loc string) (Account, error
 	}
 
 	return Account{
-		id:                     loc,
-		pk:                     req.AccountKey.pk,
-		thumbprint:             req.AccountKey.thumbprint,
+		AccountKey: AccountKey{
+			id:         loc,
+			pk:         req.AccountKey.pk,
+			thumbprint: req.AccountKey.thumbprint},
 		CreatedAt:              res.CreatedAt,
 		Status:                 res.Status,
 		Contact:                contact,
@@ -152,7 +153,7 @@ func newAccount(req AccountCfg, res accountResponse, loc string) (Account, error
 }
 
 type Account struct {
-	AccountKey             `json:"-"`
+	AccountKey             AccountKey             `json:"-"`
 	CreatedAt              time.Time              `json:"createdAt"`
 	Status                 AccountStatus          `json:"status"`
 	Contact                []string               `json:"contact"`
