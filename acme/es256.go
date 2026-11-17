@@ -40,10 +40,6 @@ type es256Key struct {
 	thumbprint []byte
 }
 
-func (e es256Key) Bytes() ([]byte, error) {
-	return e.pk.Bytes()
-}
-
 func newE256KeyFromECDSA(pk *ecdsa.PrivateKey) (es256Key, error) {
 	var (
 		err error
