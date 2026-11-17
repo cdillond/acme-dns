@@ -22,10 +22,10 @@ type Identifier struct {
 	Value string `json:"value"`
 }
 
-type OrderStatus uint32
+type orderStatus uint32
 
 const (
-	OrderStatusInvalid OrderStatus = iota
+	OrderStatusInvalid orderStatus = iota
 	OrderStatusPending
 	OrderStatusReady
 	OrderStatusProcessing
@@ -33,7 +33,7 @@ const (
 	orderStatusUnknown
 )
 
-func (o OrderStatus) isValid() bool {
+func (o orderStatus) isValid() bool {
 	return o < orderStatusUnknown
 }
 
@@ -45,17 +45,17 @@ var orderStrings = [orderStatusUnknown]string{
 	"valid",
 }
 
-func NewOrderStatus(s string) OrderStatus {
+func newOrderStatus(s string) orderStatus {
 	n := slices.Index(orderStrings[:], s)
 
 	if n == -1 {
 		return orderStatusUnknown
 	}
 
-	return OrderStatus(n)
+	return orderStatus(n)
 }
 
-func (o OrderStatus) String() string {
+func (o orderStatus) String() string {
 	if o >= orderStatusUnknown {
 		return "unknown"
 	}
@@ -63,11 +63,11 @@ func (o OrderStatus) String() string {
 	return orderStrings[o]
 }
 
-func (o *OrderStatus) MarshalJSONTo(enc *jsontext.Encoder) error {
+func (o *orderStatus) MarshalJSONTo(enc *jsontext.Encoder) error {
 	return enc.WriteToken(jsontext.String(o.String()))
 }
 
-func (o *OrderStatus) UnmarshalJSONFrom(dec *jsontext.Decoder) error {
+func (o *orderStatus) UnmarshalJSONFrom(dec *jsontext.Decoder) error {
 	tok, err := dec.ReadToken()
 	if err != nil {
 		return err
@@ -78,29 +78,24 @@ func (o *OrderStatus) UnmarshalJSONFrom(dec *jsontext.Decoder) error {
 
 	s := tok.String()
 
-	*o = NewOrderStatus(s)
+	*o = newOrderStatus(s)
 
 	return nil
 }
 
-type UnexpectedOrderStatusError OrderStatus
+type UnexpectedOrderStatusError orderStatus
 
 func (u UnexpectedOrderStatusError) Error() string {
-	return "unexpected order status: " + OrderStatus(u).String()
+	return "unexpected order status: " + orderStatus(u).String()
 }
 
 type OrderCfg struct {
-	AccountKey      AccountKey
-	Domains         map[string]Provider
-	NotBefore       time.Time
-	NotAfter        time.Time
-	DnsConfirmation DNSConfirmationFunc
-}
-
-type OrderRequest struct {
-	Domains   map[string]Provider
+	// Optional: not supported by all CAs.
 	NotBefore time.Time
-	NotAfter  time.Time
+	// Optional: not supported by all CAs.
+	NotAfter time.Time
+	// Optional: the default behavior uses [net.Resolver] with [net.Resolver.PreferGo] set to true.
+	DnsConfirmation DNSConfirmationFunc
 }
 
 func identifiers(domains []string) []Identifier {
@@ -121,8 +116,8 @@ type orderRequest struct {
 	NotAfter    time.Time    `json:"notAfter,omitzero"`
 }
 
-type Order struct {
-	Status         OrderStatus  `json:"status"`
+type order struct {
+	Status         orderStatus  `json:"status"`
 	Expires        time.Time    `json:"expires"`
 	Identifiers    []Identifier `json:"identifiers"`
 	NotBefore      time.Time    `json:"notBefore"`
@@ -139,7 +134,7 @@ type Order struct {
 	retryAfter retryAfter          `json:"-"`
 }
 
-func filterChallenges(src []Challenge) *Challenge {
+func filterChallenges(src []challenge) *challenge {
 	for i := range src {
 		if src[i].Type == "dns-01" {
 			return &src[i]
@@ -152,6 +147,16 @@ func defaultCleanupFn(ctx context.Context) error {
 	return nil
 }
 
+// When performing an ACME dns challenge (as part of [Client.OrderCertificate]), the [Client] confirms
+// that all provisioned TXT records are publicly accessible before prompting the server to validate
+// the challenge. By default, it does this by resolving each provisioned TXT record using the standard
+// library's [net.Resolver], with [net.Resolver.PreferGo] set to true. On platforms where the Go resolver
+// is not supported, and on builds where the Go resolver is explicitly disabled, the default behavior may
+// run into timeouts caused by the platform's recursive resolver cache.
+// To avoid this issue, users can supply a [DNSConfirmationFunc] that resolves the [TxtRecord] and returns
+// true if the resolution succeeded. A potential implementation may choose to query a domain's authoritative
+// name servers, rely on an external DNS server (such as 1.1.1.1), or (not recommended) skip confirmation
+// entirely.
 type DNSConfirmationFunc func(context.Context, TxtRecord) (bool, error)
 
 func confirmTXT(ctx context.Context, record TxtRecord) (bool, error) {
@@ -214,7 +219,7 @@ func pollForDNS(ctx context.Context, record TxtRecord, fn DNSConfirmationFunc, r
 	return n
 }
 
-func (c *Client) provisionAuthz(ctx context.Context, key es256Key, az Authz, domains map[string]Provider) (TxtRecord, CleanupFunc, error) {
+func (c *Client) provisionAuthz(ctx context.Context, key es256Key, az authz, domains map[string]Provider) (TxtRecord, CleanupFunc, error) {
 	dnsChallenge := filterChallenges(az.Challenges)
 	if dnsChallenge == nil {
 		return TxtRecord{}, nil, errors.New("no dns challenge available for Authz")
@@ -247,10 +252,10 @@ func (c *Client) provisionAuthz(ctx context.Context, key es256Key, az Authz, dom
 	return txt, cleanup, nil
 }
 
-func (c *Client) validateAuthz(ctx context.Context, key es256Key, az Authz) error {
+func (c *Client) validateAuthz(ctx context.Context, key es256Key, az authz) error {
 	var (
-		dns *Challenge
-		raw RawChallenge
+		dns *challenge
+		raw rawChallenge
 		err error
 	)
 
@@ -307,12 +312,11 @@ type AttemptCfg struct {
 	DnsConfirmation DNSConfirmationFunc
 }
 
-func (c *Client) attempt(ctx context.Context, o *Order, cfg OrderCfg, domains []string) (b []byte, certKey *ecdsa.PrivateKey, err error) {
+func (c *Client) attempt(ctx context.Context, o *order, key es256Key, domains []string, cfg OrderCfg) (b []byte, certKey *ecdsa.PrivateKey, err error) {
 	var (
-		key      es256Key = cfg.AccountKey.es256Key
 		ch       chan error
-		az       Authz
-		auths    []Authz
+		az       authz
+		auths    []authz
 		url      string
 		txt      TxtRecord
 		fn       CleanupFunc
@@ -351,7 +355,7 @@ func (c *Client) attempt(ctx context.Context, o *Order, cfg OrderCfg, domains []
 	ch = make(chan error, len(auths))
 
 	for _, az = range auths {
-		go func(ctx context.Context, key es256Key, az Authz) {
+		go func(ctx context.Context, key es256Key, az authz) {
 			ch <- c.validateAuthz(ctx, key, az)
 		}(ctx, key, az)
 	}
@@ -532,7 +536,7 @@ func (c *Client) downloadCert(ctx context.Context, url string, key es256Key) ([]
 
 func (c *Client) pollForValidAuthz(ctx context.Context, urls []string, key es256Key, retries int) error {
 	var (
-		authz Authz
+		authz authz
 		err   error
 		i     int
 		n     = RetryError(retries)
@@ -570,7 +574,7 @@ func (c *Client) pollForValidAuthz(ctx context.Context, urls []string, key es256
 
 }
 
-func (c *Client) pollForCertURL(ctx context.Context, url string, key es256Key, out *Order, retries int) (string, error) {
+func (c *Client) pollForCertURL(ctx context.Context, url string, key es256Key, out *order, retries int) (string, error) {
 	var (
 		err error
 		n   = RetryError(retries)
@@ -596,7 +600,7 @@ func (c *Client) pollForCertURL(ctx context.Context, url string, key es256Key, o
 
 }
 
-func (c *Client) finalize(ctx context.Context, url string, domains []string, actKey es256Key, certKey *ecdsa.PrivateKey, out *Order) error {
+func (c *Client) finalize(ctx context.Context, url string, domains []string, actKey es256Key, certKey *ecdsa.PrivateKey, out *order) error {
 	var (
 		err error
 		csr csr
@@ -622,7 +626,7 @@ func (c *Client) finalize(ctx context.Context, url string, domains []string, act
 	return nil
 }
 
-func (c *Client) submitFinalize(ctx context.Context, url string, key es256Key, b []byte, out *Order) error {
+func (c *Client) submitFinalize(ctx context.Context, url string, key es256Key, b []byte, out *order) error {
 	var (
 		res *http.Response
 		err error
@@ -668,7 +672,7 @@ func (c *Client) submitFinalize(ctx context.Context, url string, key es256Key, b
 	return nil
 }
 
-func (c *Client) pollForOrderReady(ctx context.Context, url string, key es256Key, out *Order, retries int) error {
+func (c *Client) pollForOrderReady(ctx context.Context, url string, key es256Key, out *order, retries int) error {
 	var (
 		err error
 		n   = RetryError(retries)
@@ -700,7 +704,7 @@ func (c *Client) pollForOrderReady(ctx context.Context, url string, key es256Key
 	return n
 }
 
-func (c *Client) fetchOrder(ctx context.Context, url string, key es256Key, out *Order) error {
+func (c *Client) fetchOrder(ctx context.Context, url string, key es256Key, out *order) error {
 	var (
 		res *http.Response
 		err error

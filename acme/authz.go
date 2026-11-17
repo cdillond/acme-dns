@@ -20,19 +20,19 @@ const (
 	ErrFailedChallenge FailedError = "challenge"
 )
 
-type Authz struct {
+type authz struct {
 	Identifier Identifier  `json:"identifier"`
-	Status     AuthzStatus `json:"status"`
+	Status     authzStatus `json:"status"`
 	Expires    time.Time   `json:"expires,omitzero"`
-	Challenges []Challenge `json:"challenges"`
+	Challenges []challenge `json:"challenges"`
 	Wildcard   bool        `json:"wildcard"`
 	retryAfter retryAfter  `json:"-"`
 }
 
-type AuthzStatus uint32
+type authzStatus uint32
 
 const (
-	AuthzStatusInvalid AuthzStatus = iota
+	AuthzStatusInvalid authzStatus = iota
 	AuthzStatusPending
 	AuthzStatusValid
 	AuthzStatusDeactivated
@@ -50,17 +50,17 @@ var authzStrings = [authzStatusUnknown]string{
 	"revoked",
 }
 
-func NewAuthzStatus(s string) AuthzStatus {
+func newAuthzStatus(s string) authzStatus {
 	n := slices.Index(authzStrings[:], s)
 
 	if n == -1 {
 		return authzStatusUnknown
 	}
 
-	return AuthzStatus(n)
+	return authzStatus(n)
 }
 
-func (a AuthzStatus) String() string {
+func (a authzStatus) String() string {
 	if a >= authzStatusUnknown {
 		return "unknown"
 	}
@@ -68,11 +68,11 @@ func (a AuthzStatus) String() string {
 	return authzStrings[a]
 }
 
-func (a *AuthzStatus) MarshalJSONTo(enc *jsontext.Encoder) error {
+func (a *authzStatus) MarshalJSONTo(enc *jsontext.Encoder) error {
 	return enc.WriteToken(jsontext.String(a.String()))
 }
 
-func (a *AuthzStatus) UnmarshalJSONFrom(dec *jsontext.Decoder) error {
+func (a *authzStatus) UnmarshalJSONFrom(dec *jsontext.Decoder) error {
 	tok, err := dec.ReadToken()
 	if err != nil {
 		return err
@@ -83,13 +83,13 @@ func (a *AuthzStatus) UnmarshalJSONFrom(dec *jsontext.Decoder) error {
 
 	s := tok.String()
 
-	*a = NewAuthzStatus(s)
+	*a = newAuthzStatus(s)
 
 	return nil
 }
 
-type UnexpectedAuthzStatusError AuthzStatus
+type UnexpectedAuthzStatusError authzStatus
 
 func (u UnexpectedAuthzStatusError) Error() string {
-	return "unexpected authz status: " + AuthzStatus(u).String()
+	return "unexpected authz status: " + authzStatus(u).String()
 }

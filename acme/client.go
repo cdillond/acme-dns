@@ -113,17 +113,17 @@ func (c Client) signedPostAsGet(ctx context.Context, url string, key es256Key) (
 	return c.signedPost(ctx, url, key, []byte{})
 }
 
-// RequestAccount requests a new or existing account from the ACME server. If the information
-// provided in the [AccountRequest] argument matches an existing account, the server will return
-// the existing account and will otherwise create a new account, unless [AccountRequest.OnlyReturnExisting] is
-// set to [true], in which case it will only return existing accounts and return an [error] instead
+// RequestAccount requests a new or existing [Account] from the ACME server. If the information
+// provided in the [AccountCfg] argument matches an existing account, the server will return
+// the existing account and will otherwise create a new account, unless [AccountCfg.OnlyReturnExisting] is
+// set to true, in which case it will only return existing accounts and return an [error] instead
 // of creating a new account. The old return value indicates whether or not the account already
-// existed. If old is [false], then the account was newly created, and vice-versa.
+// existed. If old is false, then the account was newly created, and vice-versa.
 //
-// Note: The CA server is free to ignore data in the [AccountRequest.Contact], [AccountRequest.TermsOfServiceAgreed],
-// and [AccountRequest.ExternalAccountBinding] fields, and the corresponding values in the returned Account object might
+// Note: The CA server is free to ignore data in the [AccountCfg.Contact], [AccountCfg.TermsOfServiceAgreed],
+// and [AccountCfg.ExternalAccountBinding] fields, and the corresponding values in the returned [Account] object might
 // not reflect the actual values stored by the CA.
-func (c Client) RequestAccount(ctx context.Context, a AccountRequest) (acc Account, old bool, err error) {
+func (c Client) RequestAccount(ctx context.Context, a AccountCfg) (acc Account, old bool, err error) {
 	var (
 		raw []byte
 		dto accountResponse
@@ -158,23 +158,15 @@ func (c Client) RequestAccount(ctx context.Context, a AccountRequest) (acc Accou
 	return acc, res.StatusCode == http.StatusOK, err
 }
 
-func (c Client) newOrder(ctx context.Context, cfg OrderCfg, domainSlice []string) (Order, error) {
+func (c Client) newOrder(ctx context.Context, accountKey AccountKey, domainSlice []string, cfg OrderCfg) (order, error) {
 	var (
-		out Order
+		out order
 		bad Problem
 		err error
 		raw []byte
 		res *http.Response
 		dec *jsontext.Decoder
 	)
-
-	if cfg.AccountKey.id == "" {
-		return out, errors.New("uninitialized account key")
-	}
-
-	if len(cfg.Domains) == 0 {
-		return out, errors.New("order domains must not be empty")
-	}
 
 	if raw, err = json.Marshal(orderRequest{
 		Identifiers: identifiers(domainSlice),
@@ -184,7 +176,7 @@ func (c Client) newOrder(ctx context.Context, cfg OrderCfg, domainSlice []string
 		return out, err
 	}
 
-	if res, err = c.signedPost(ctx, c.dir.NewOrder, cfg.AccountKey.es256Key, raw); err != nil {
+	if res, err = c.signedPost(ctx, c.dir.NewOrder, accountKey.es256Key, raw); err != nil {
 		return out, err
 	}
 
@@ -207,13 +199,13 @@ func (c Client) newOrder(ctx context.Context, cfg OrderCfg, domainSlice []string
 	}
 
 	out.location = res.Header.Get("Location")
-	out.domains = cfg.Domains
+	out.domains = out.domains
 	//out.client = &c
 
 	return out, err
 }
 
-func (c Client) fetchUnmarshalAuthz(ctx context.Context, url string, key es256Key, out *Authz) error {
+func (c Client) fetchUnmarshalAuthz(ctx context.Context, url string, key es256Key, out *authz) error {
 	var (
 		err error
 		res *http.Response
@@ -246,9 +238,9 @@ func (c Client) fetchUnmarshalAuthz(ctx context.Context, url string, key es256Ke
 	return err
 }
 
-func (c Client) fetchChallenge(ctx context.Context, url string, key es256Key, payload []byte) (RawChallenge, error) {
+func (c Client) fetchChallenge(ctx context.Context, url string, key es256Key, payload []byte) (rawChallenge, error) {
 	var (
-		out RawChallenge
+		out rawChallenge
 		res *http.Response
 		dec *jsontext.Decoder
 		bad Problem
@@ -283,23 +275,23 @@ func (c Client) fetchChallenge(ctx context.Context, url string, key es256Key, pa
 
 // fetchRawChallenge fetches the current state of a challenge without starting
 // validation.
-func (c Client) fetchRawChallenge(ctx context.Context, url string, key es256Key) (RawChallenge, error) {
+func (c Client) fetchRawChallenge(ctx context.Context, url string, key es256Key) (rawChallenge, error) {
 	return c.fetchChallenge(ctx, url, key, []byte{})
 }
 
 // acceptChallenge tells the ACME server that the challenge response has been
 // provisioned and that validation should begin. Per RFC 8555 section 7.5.1,
 // this is a POST with an empty JSON object ("{}") to the challenge URL.
-func (c Client) acceptChallenge(ctx context.Context, url string, key es256Key) (RawChallenge, error) {
+func (c Client) acceptChallenge(ctx context.Context, url string, key es256Key) (rawChallenge, error) {
 	return c.fetchChallenge(ctx, url, key, []byte("{}"))
 }
 
-func (c Client) fetchAuthz(ctx context.Context, urls []string, key es256Key) ([]Authz, error) {
+func (c Client) fetchAuthz(ctx context.Context, urls []string, key es256Key) ([]authz, error) {
 	var (
 		err error
 		i   int
 		url string
-		out = make([]Authz, len(urls))
+		out = make([]authz, len(urls))
 	)
 
 	for i, url = range urls {
@@ -348,19 +340,22 @@ func NewClient(ctx context.Context, CADirURL CADirURL, log *slog.Logger) (Client
 	return c, nil
 }
 
-func (c *Client) OrderCertificate(ctx context.Context, cfg OrderCfg) (Certificate, error) {
-	if len(cfg.Domains) == 0 {
+func (c *Client) OrderCertificate(ctx context.Context, accountKey AccountKey, domains map[string]Provider, cfg OrderCfg) (Certificate, error) {
+	if accountKey.id == "" {
+		return Certificate{}, errors.New("uninitialized AccountKey")
+	}
+	if len(domains) == 0 {
 		return Certificate{}, errors.New("order must include at least 1 domain")
 	}
 
-	s := slices.Collect(maps.Keys(cfg.Domains))
+	s := slices.Collect(maps.Keys(domains))
 
-	o, err := c.newOrder(ctx, cfg, s)
+	o, err := c.newOrder(ctx, accountKey, s, cfg)
 	if err != nil {
 		return Certificate{}, err
 	}
 
-	b, key, err := c.attempt(ctx, &o, cfg, s)
+	b, key, err := c.attempt(ctx, &o, accountKey.es256Key, s, cfg)
 	if err != nil {
 		return Certificate{}, err
 	}

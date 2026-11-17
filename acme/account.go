@@ -42,7 +42,7 @@ var accountStrings = [accountStatusUnknown]string{
 	"revoked",
 }
 
-func NewAccountStatus(s string) AccountStatus {
+func newAccountStatus(s string) AccountStatus {
 	n := slices.Index(accountStrings[:], s)
 
 	if n == -1 {
@@ -75,12 +75,12 @@ func (a *AccountStatus) UnmarshalJSONFrom(dec *jsontext.Decoder) error {
 
 	s := tok.String()
 
-	*a = NewAccountStatus(s)
+	*a = newAccountStatus(s)
 
 	return nil
 }
 
-type AccountRequest struct {
+type AccountCfg struct {
 	AccountKey             `json:"-"`
 	Contact                []string               `json:"contact,omitempty"`
 	TermsOfServiceAgreed   bool                   `json:"termsOfServiceAgreed"`
@@ -88,8 +88,8 @@ type AccountRequest struct {
 	ExternalAccountBinding ExternalAccountBinding `json:"externalAccountBinding,omitempty"`
 }
 
-func NewAccountRequest(contacts []string, key AccountKey) AccountRequest {
-	return AccountRequest{
+func NewAccountCfg(contacts []string, key AccountKey) AccountCfg {
+	return AccountCfg{
 		AccountKey:             key,
 		Contact:                contacts,
 		TermsOfServiceAgreed:   true,
@@ -108,7 +108,7 @@ type accountResponse struct {
 	Orders                 string                  `json:"orders"`
 }
 
-func newAccount(req AccountRequest, res accountResponse, loc string) (Account, error) {
+func newAccount(req AccountCfg, res accountResponse, loc string) (Account, error) {
 	if loc == "" {
 		return Account{}, errors.New("invalid location")
 	}

@@ -7,27 +7,27 @@ import (
 	"time"
 )
 
-type RawChallenge struct {
+type rawChallenge struct {
 	Type       string          `json:"type"`
 	URL        string          `json:"url"`
-	Status     ChallengeStatus `json:"status"`
+	Status     challengeStatus `json:"status"`
 	Token      string          `json:"token"`
 	retryAfter retryAfter      `json:"-"`
 }
 
-type Challenge struct {
+type challenge struct {
 	Type      string          `json:"type"`
 	URL       string          `json:"url"`
-	Status    ChallengeStatus `json:"status"`
+	Status    challengeStatus `json:"status"`
 	Token     string          `json:"token"`
 	Validated time.Time       `json:"validated,omitzero"`
 	Error     *Problem        `json:"error,omitzero"`
 }
 
-type ChallengeStatus uint32
+type challengeStatus uint32
 
 const (
-	ChallengeStatusInvalid ChallengeStatus = iota
+	ChallengeStatusInvalid challengeStatus = iota
 	ChallengeStatusPending
 	ChallengeStatusProcessing
 	ChallengeStatusValid
@@ -41,17 +41,17 @@ var challengeStrings = [challengeStatusUnknown]string{
 	"valid",
 }
 
-func NewChallengeStatus(s string) ChallengeStatus {
+func newChallengeStatus(s string) challengeStatus {
 	n := slices.Index(challengeStrings[:], s)
 
 	if n == -1 {
 		return challengeStatusUnknown
 	}
 
-	return ChallengeStatus(n)
+	return challengeStatus(n)
 }
 
-func (c ChallengeStatus) String() string {
+func (c challengeStatus) String() string {
 	if c >= challengeStatusUnknown {
 		return "unknown"
 	}
@@ -59,11 +59,11 @@ func (c ChallengeStatus) String() string {
 	return challengeStrings[c]
 }
 
-func (c *ChallengeStatus) MarshalJSONTo(enc *jsontext.Encoder) error {
+func (c *challengeStatus) MarshalJSONTo(enc *jsontext.Encoder) error {
 	return enc.WriteToken(jsontext.String(c.String()))
 }
 
-func (c *ChallengeStatus) UnmarshalJSONFrom(dec *jsontext.Decoder) error {
+func (c *challengeStatus) UnmarshalJSONFrom(dec *jsontext.Decoder) error {
 	tok, err := dec.ReadToken()
 	if err != nil {
 		return err
@@ -74,13 +74,13 @@ func (c *ChallengeStatus) UnmarshalJSONFrom(dec *jsontext.Decoder) error {
 
 	s := tok.String()
 
-	*c = NewChallengeStatus(s)
+	*c = newChallengeStatus(s)
 
 	return nil
 }
 
-type UnexpectedChallengeStatusError OrderStatus
+type UnexpectedChallengeStatusError orderStatus
 
 func (u UnexpectedChallengeStatusError) Error() string {
-	return "unexpected challenge status: " + ChallengeStatus(u).String()
+	return "unexpected challenge status: " + challengeStatus(u).String()
 }
