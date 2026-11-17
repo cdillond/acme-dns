@@ -81,16 +81,16 @@ func (a *AccountStatus) UnmarshalJSONFrom(dec *jsontext.Decoder) error {
 }
 
 type AccountRequest struct {
-	ES256Key               `json:"-"`
+	AccountKey             `json:"-"`
 	Contact                []string               `json:"contact,omitempty"`
 	TermsOfServiceAgreed   bool                   `json:"termsOfServiceAgreed"`
 	OnlyReturnExisting     bool                   `json:"onlyReturnExisting"`
 	ExternalAccountBinding ExternalAccountBinding `json:"externalAccountBinding,omitempty"`
 }
 
-func NewAccountRequest(contacts []string, key ES256Key) AccountRequest {
+func NewAccountRequest(contacts []string, key AccountKey) AccountRequest {
 	return AccountRequest{
-		ES256Key:               key,
+		AccountKey:             key,
 		Contact:                contacts,
 		TermsOfServiceAgreed:   true,
 		OnlyReturnExisting:     false,
@@ -117,7 +117,7 @@ func newAccount(req AccountRequest, res accountResponse, loc string) (Account, e
 	if err != nil {
 		return Account{}, err
 	}
-	if !bytes.Equal(req.ES256Key.thumbprint, thumb) {
+	if !bytes.Equal(req.es256Key.thumbprint, thumb) {
 		return Account{}, errors.New("returned key does not match expected thumbprint")
 	}
 	if res.Status == accountStatusUnspecified || !res.Status.isValid() {
@@ -139,11 +139,9 @@ func newAccount(req AccountRequest, res accountResponse, loc string) (Account, e
 	}
 
 	return Account{
-		ES256Key: ES256Key{
-			id:         loc,
-			pk:         req.pk,
-			thumbprint: req.thumbprint,
-		},
+		id:                     loc,
+		pk:                     req.pk,
+		thumbprint:             req.thumbprint,
 		CreatedAt:              res.CreatedAt,
 		Status:                 res.Status,
 		Contact:                contact,
@@ -154,7 +152,7 @@ func newAccount(req AccountRequest, res accountResponse, loc string) (Account, e
 }
 
 type Account struct {
-	ES256Key               ES256Key               `json:"-"`
+	AccountKey             `json:"-"`
 	CreatedAt              time.Time              `json:"createdAt"`
 	Status                 AccountStatus          `json:"status"`
 	Contact                []string               `json:"contact"`

@@ -3,11 +3,15 @@ package acme
 import (
 	"bytes"
 	"context"
+	"crypto/x509"
 	"encoding/json/jsontext"
 	"encoding/json/v2"
+	"encoding/pem"
 	"errors"
 	"log/slog"
+	"maps"
 	"net/http"
+	"slices"
 )
 
 /*
@@ -60,7 +64,7 @@ func (c Client) requestNonce(ctx context.Context) (string, error) {
 	return s, err
 }
 
-func (c Client) jws(ctx context.Context, url string, key ES256Key, payload []byte) ([]byte, error) {
+func (c Client) jws(ctx context.Context, url string, key es256Key, payload []byte) ([]byte, error) {
 	var (
 		nonce string
 		err   error
@@ -83,7 +87,7 @@ func (c Client) jws(ctx context.Context, url string, key ES256Key, payload []byt
 	return b, err
 }
 
-func (c Client) signedPost(ctx context.Context, url string, key ES256Key, payload []byte) (*http.Response, error) {
+func (c Client) signedPost(ctx context.Context, url string, key es256Key, payload []byte) (*http.Response, error) {
 	var (
 		req *http.Request
 		res *http.Response
@@ -105,7 +109,7 @@ func (c Client) signedPost(ctx context.Context, url string, key ES256Key, payloa
 	return http.DefaultClient.Do(req)
 }
 
-func (c Client) signedPostAsGet(ctx context.Context, url string, key ES256Key) (*http.Response, error) {
+func (c Client) signedPostAsGet(ctx context.Context, url string, key es256Key) (*http.Response, error) {
 	return c.signedPost(ctx, url, key, []byte{})
 }
 
@@ -131,7 +135,7 @@ func (c Client) RequestAccount(ctx context.Context, a AccountRequest) (acc Accou
 		return acc, false, err
 	}
 
-	if res, err = c.signedPost(ctx, c.dir.NewAccount, a.ES256Key, raw); err != nil {
+	if res, err = c.signedPost(ctx, c.dir.NewAccount, a.es256Key, raw); err != nil {
 		return acc, false, err
 	}
 
@@ -154,7 +158,7 @@ func (c Client) RequestAccount(ctx context.Context, a AccountRequest) (acc Accou
 	return acc, res.StatusCode == http.StatusOK, err
 }
 
-func (c Client) NewOrder(ctx context.Context, account Account, order OrderRequest) (Order, error) {
+func (c Client) newOrder(ctx context.Context, cfg OrderCfg, domainSlice []string) (Order, error) {
 	var (
 		out Order
 		bad Problem
@@ -164,19 +168,23 @@ func (c Client) NewOrder(ctx context.Context, account Account, order OrderReques
 		dec *jsontext.Decoder
 	)
 
-	if account.ES256Key.id == "" {
+	if cfg.AccountKey.id == "" {
 		return out, errors.New("uninitialized account key")
 	}
 
-	if len(order.Domains) == 0 {
+	if len(cfg.Domains) == 0 {
 		return out, errors.New("order domains must not be empty")
 	}
 
-	if raw, err = json.Marshal(order.toDto()); err != nil {
+	if raw, err = json.Marshal(orderRequest{
+		Identifiers: identifiers(domainSlice),
+		NotBefore:   cfg.NotBefore,
+		NotAfter:    cfg.NotAfter,
+	}); err != nil {
 		return out, err
 	}
 
-	if res, err = c.signedPost(ctx, c.dir.NewOrder, account.ES256Key, raw); err != nil {
+	if res, err = c.signedPost(ctx, c.dir.NewOrder, cfg.AccountKey.es256Key, raw); err != nil {
 		return out, err
 	}
 
@@ -199,14 +207,13 @@ func (c Client) NewOrder(ctx context.Context, account Account, order OrderReques
 	}
 
 	out.location = res.Header.Get("Location")
-	out.domains = order.Domains
-	out.account = &account
-	out.client = &c
+	out.domains = cfg.Domains
+	//out.client = &c
 
 	return out, err
 }
 
-func (c Client) fetchUnmarshalAuthz(ctx context.Context, url string, key ES256Key, out *Authz) error {
+func (c Client) fetchUnmarshalAuthz(ctx context.Context, url string, key es256Key, out *Authz) error {
 	var (
 		err error
 		res *http.Response
@@ -239,7 +246,7 @@ func (c Client) fetchUnmarshalAuthz(ctx context.Context, url string, key ES256Ke
 	return err
 }
 
-func (c Client) fetchChallenge(ctx context.Context, url string, key ES256Key, payload []byte) (RawChallenge, error) {
+func (c Client) fetchChallenge(ctx context.Context, url string, key es256Key, payload []byte) (RawChallenge, error) {
 	var (
 		out RawChallenge
 		res *http.Response
@@ -276,18 +283,18 @@ func (c Client) fetchChallenge(ctx context.Context, url string, key ES256Key, pa
 
 // fetchRawChallenge fetches the current state of a challenge without starting
 // validation.
-func (c Client) fetchRawChallenge(ctx context.Context, url string, key ES256Key) (RawChallenge, error) {
+func (c Client) fetchRawChallenge(ctx context.Context, url string, key es256Key) (RawChallenge, error) {
 	return c.fetchChallenge(ctx, url, key, []byte{})
 }
 
 // acceptChallenge tells the ACME server that the challenge response has been
 // provisioned and that validation should begin. Per RFC 8555 section 7.5.1,
 // this is a POST with an empty JSON object ("{}") to the challenge URL.
-func (c Client) acceptChallenge(ctx context.Context, url string, key ES256Key) (RawChallenge, error) {
+func (c Client) acceptChallenge(ctx context.Context, url string, key es256Key) (RawChallenge, error) {
 	return c.fetchChallenge(ctx, url, key, []byte("{}"))
 }
 
-func (c Client) fetchAuthz(ctx context.Context, urls []string, key ES256Key) ([]Authz, error) {
+func (c Client) fetchAuthz(ctx context.Context, urls []string, key es256Key) ([]Authz, error) {
 	var (
 		err error
 		i   int
@@ -339,4 +346,58 @@ func NewClient(ctx context.Context, CADirURL CADirURL, log *slog.Logger) (Client
 	c.Log = log
 
 	return c, nil
+}
+
+func (c *Client) OrderCertificate(ctx context.Context, cfg OrderCfg) (Certificate, error) {
+	if len(cfg.Domains) == 0 {
+		return Certificate{}, errors.New("order must include at least 1 domain")
+	}
+
+	s := slices.Collect(maps.Keys(cfg.Domains))
+
+	o, err := c.newOrder(ctx, cfg, s)
+	if err != nil {
+		return Certificate{}, err
+	}
+
+	b, key, err := c.attempt(ctx, &o, cfg, s)
+	if err != nil {
+		return Certificate{}, err
+	}
+
+	if len(b) == 0 {
+		return Certificate{}, errors.New("no certificate provided")
+	}
+
+	chain := parsePEMChain(b)
+
+	out := make([]*x509.Certificate, len(chain))
+
+	for i, der := range chain {
+		if out[i], err = x509.ParseCertificate(der); err != nil {
+			return Certificate{}, err
+		}
+	}
+
+	return Certificate{
+		PrivateKey: key,
+		Chain:      out,
+	}, nil
+}
+
+func parsePEMChain(b []byte) [][]byte {
+	var (
+		block *pem.Block
+		chain [][]byte
+	)
+
+	for block, b = pem.Decode(b); block != nil; block, b = pem.Decode(b) {
+		chain = append(chain, block.Bytes)
+
+		if len(b) == 0 {
+			return chain
+		}
+	}
+
+	return chain
 }

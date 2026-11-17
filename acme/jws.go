@@ -20,7 +20,7 @@ type jwk struct {
 	Y   string `json:"y"`
 }
 
-func (e ES256Key) jwk() (jwk, error) {
+func (e es256Key) jwk() (jwk, error) {
 	if e.pk == nil {
 		return jwk{}, errors.New("uninitialized ES256Key")
 	}
@@ -42,23 +42,7 @@ func (e ES256Key) jwk() (jwk, error) {
 	}, nil
 }
 
-// thumbprint returns the RFC 7638 SHA-256 thumbprint of the JWK.
-func (k jwk) thumbprint() ([sha256.Size]byte, error) {
-	if k.Kty != "EC" || k.Crv != "P-256" {
-		return [sha256.Size]byte{}, errors.New("invalid ES256 JWK")
-	}
-	if k.X == "" || k.Y == "" {
-		return [sha256.Size]byte{}, errors.New("invalid 256 JWK")
-	}
-
-	b, err := json.Marshal(&k, json.Deterministic(true))
-	if err != nil {
-		return [sha256.Size]byte{}, err
-	}
-
-	return sha256.Sum256(b), nil
-}
-
+// append thumbprint appends the RFC 7638 SHA-256 thumbprint of the JWK to dst and returns it.
 func (k jwk) appendThumbprint(dst []byte) ([]byte, error) {
 	var (
 		h   = sha256.New()
@@ -79,7 +63,7 @@ type jwsDto struct {
 	Sig       string `json:"signature"`
 }
 
-func sign(url string, key ES256Key, payload []byte, nonce string) (jwsDto, error) {
+func sign(url string, key es256Key, payload []byte, nonce string) (jwsDto, error) {
 	var (
 		out       jwsDto
 		err       error
@@ -87,7 +71,7 @@ func sign(url string, key ES256Key, payload []byte, nonce string) (jwsDto, error
 		digest    [32]byte
 		r, s      *big.Int
 		sig       []byte
-		h         = jwsHeader{
+		h         = jwsHeaderRequiredFields{
 			Alg:   "ES256",
 			URL:   url,
 			Nonce: nonce,
@@ -95,15 +79,25 @@ func sign(url string, key ES256Key, payload []byte, nonce string) (jwsDto, error
 	)
 
 	if key.id == "" {
-		if h.JWK, err = key.jwk(); err != nil {
+		x := jwsHeaderWithJWK{
+			jwsHeaderRequiredFields: h,
+		}
+
+		if x.JWK, err = key.jwk(); err != nil {
+			return out, err
+		}
+
+		if protected, err = json.Marshal(&x); err != nil {
 			return out, err
 		}
 	} else {
-		h.KID = key.id
-	}
-
-	if protected, err = json.Marshal(h); err != nil {
-		return out, err
+		x := jwsHeaderWithKID{
+			jwsHeaderRequiredFields: h,
+			KID:                     key.id,
+		}
+		if protected, err = json.Marshal(&x); err != nil {
+			return out, err
+		}
 	}
 
 	out.Protected = base64.RawURLEncoding.EncodeToString(protected)
@@ -125,11 +119,18 @@ func sign(url string, key ES256Key, payload []byte, nonce string) (jwsDto, error
 	return out, nil
 }
 
-type jwsHeader struct {
-	Alg string `json:"alg"`
-	// KID and JWK are mutually exclusive
-	KID   string `json:"kid,omitempty"`
-	JWK   jwk    `json:"jwk,omitzero"`
+type jwsHeaderRequiredFields struct {
+	Alg   string `json:"alg"`
 	URL   string `json:"url"`
 	Nonce string `json:"nonce"`
+}
+
+type jwsHeaderWithKID struct {
+	KID string `json:"kid"`
+	jwsHeaderRequiredFields
+}
+
+type jwsHeaderWithJWK struct {
+	JWK jwk `json:"jwk"`
+	jwsHeaderRequiredFields
 }
