@@ -69,6 +69,7 @@ func (c Client) signedPostID(ctx context.Context, url, id string, key es256Key, 
 		req   *http.Request
 		res   *http.Response
 		err   error
+		h     jwsHeaderWithKID
 		jws   []byte
 		nonce string
 	)
@@ -77,7 +78,9 @@ func (c Client) signedPostID(ctx context.Context, url, id string, key es256Key, 
 		return nil, err
 	}
 
-	if jws, err = key.signKID(url, id, payload, nonce); err != nil {
+	h = key.newJWSHeaderWithKID(url, id, nonce)
+
+	if jws, err = sign(key, h, payload); err != nil {
 		return nil, err
 	}
 
@@ -96,6 +99,7 @@ func (c Client) signedPostJWK(ctx context.Context, url string, key es256Key, pay
 		req   *http.Request
 		res   *http.Response
 		err   error
+		h     jwsHeaderWithJWK
 		jws   []byte
 		nonce string
 	)
@@ -104,7 +108,11 @@ func (c Client) signedPostJWK(ctx context.Context, url string, key es256Key, pay
 		return nil, err
 	}
 
-	if jws, err = key.signJWK(url, payload, nonce); err != nil {
+	if h, err = key.newJWSHeaderWithJWK(url, nonce); err != nil {
+		return nil, err
+	}
+
+	if jws, err = sign(key, h, payload); err != nil {
 		return nil, err
 	}
 
@@ -208,7 +216,7 @@ func (c Client) RequestAccountWithEAB(ctx context.Context, key AccountKey, eab E
 
 	// step 1: calculate the jwk for the account key; this will be used both in the EAB and in the JWS
 
-	if jwk, err = key.jwk(); err != nil {
+	if jwk, err = key.newJWK(); err != nil {
 		return acc, data, err
 	}
 

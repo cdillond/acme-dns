@@ -1,15 +1,11 @@
 package acme
 
 import (
-	"crypto/ecdsa"
-	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json/jsontext"
 	"encoding/json/v2"
-	"errors"
 	"hash"
-	"math/big"
 )
 
 // jwk is the public half of an ES256 key, as embedded in the "jwk" member of a
@@ -19,28 +15,6 @@ type jwk struct {
 	Kty string `json:"kty"`
 	X   string `json:"x"`
 	Y   string `json:"y"`
-}
-
-func (e es256Key) jwk() (jwk, error) {
-	if e.pk == nil {
-		return jwk{}, errors.New("uninitialized ES256Key")
-	}
-
-	// SEC 1 uncompressed point: 0x04 || X || Y. P-256 coordinates are 32 bytes.
-	point, err := e.pk.PublicKey.Bytes()
-	if err != nil {
-		return jwk{}, err
-	}
-	if len(point) != 65 || point[0] != 0x04 {
-		return jwk{}, errors.New("unexpected public key encoding")
-	}
-
-	return jwk{
-		Crv: "P-256",
-		Kty: "EC",
-		X:   base64.RawURLEncoding.EncodeToString(point[1:33]),
-		Y:   base64.RawURLEncoding.EncodeToString(point[33:65]),
-	}, nil
 }
 
 // append thumbprint appends the RFC 7638 SHA-256 thumbprint of the JWK to dst and returns it.
@@ -64,60 +38,58 @@ type jwsDto struct {
 	Sig       string `json:"signature"`
 }
 
-func sign(url, id string, key es256Key, payload []byte, nonce string) (jwsDto, error) {
+type jwsHeaderRequiredFields struct {
+	Alg   string `json:"alg"`
+	URL   string `json:"url"`
+	Nonce string `json:"nonce,omitempty"`
+}
+
+type jwsHeaderWithKID struct {
+	KID string `json:"kid"`
+	jwsHeaderRequiredFields
+}
+
+type jwsHeaderWithJWK struct {
+	JWK jwk `json:"jwk"`
+	jwsHeaderRequiredFields
+}
+
+type jwsHeader interface {
+	jwsHeaderWithJWK | jwsHeaderWithKID
+}
+
+func sign[T jwsHeader](key es256Key, h T, payload []byte) ([]byte, error) {
 	var (
-		out       jwsDto
-		err       error
+		b         []byte
 		protected []byte
-		digest    [32]byte
-		r, s      *big.Int
-		sig       []byte
-		h         = jwsHeaderRequiredFields{
-			Alg:   "ES256",
-			URL:   url,
-			Nonce: nonce,
-		}
+		err       error
+		dto       jwsDto
 	)
 
-	if id == "" {
-		x := jwsHeaderWithJWK{
-			jwsHeaderRequiredFields: h,
-		}
-
-		if x.JWK, err = key.jwk(); err != nil {
-			return out, err
-		}
-
-		if protected, err = json.Marshal(&x); err != nil {
-			return out, err
-		}
-	} else {
-		x := jwsHeaderWithKID{
-			jwsHeaderRequiredFields: h,
-			KID:                     id,
-		}
-		if protected, err = json.Marshal(&x); err != nil {
-			return out, err
-		}
+	if protected, err = json.Marshal(&h, json.Deterministic(true)); err != nil {
+		return nil, err
 	}
 
-	out.Protected = base64.RawURLEncoding.EncodeToString(protected)
-	out.Payload = base64.RawURLEncoding.EncodeToString(payload)
+	dto.Protected = base64.RawURLEncoding.EncodeToString(protected)
+	dto.Payload = base64.RawURLEncoding.EncodeToString(payload)
 
-	digest = sha256.Sum256([]byte(out.Protected + "." + out.Payload))
-
-	if r, s, err = ecdsa.Sign(rand.Reader, key.pk, digest[:]); err != nil {
-		return out, err
+	if b, err = key.sign([]byte(dto.Protected + "." + dto.Payload)); err != nil {
+		return nil, err
 	}
 
-	// JWS ES256 signatures are the raw fixed-width R || S pair.
-	sig = make([]byte, 64)
-	r.FillBytes(sig[:32])
-	s.FillBytes(sig[32:])
+	dto.Sig = base64.RawURLEncoding.EncodeToString(b)
 
-	out.Sig = base64.RawURLEncoding.EncodeToString(sig)
+	if b, err = json.Marshal(&dto, json.Deterministic(true)); err != nil {
+		return b, err
+	}
 
-	return out, nil
+	return b, nil
+}
+
+type jwsMACHeader struct {
+	Alg string `json:"alg"`
+	URL string `json:"url"`
+	KID string `json:"kid"`
 }
 
 func signMAC(url, id, alg string, hash hash.Hash, payload []byte) (jwsDto, error) {
@@ -146,26 +118,4 @@ func signMAC(url, id, alg string, hash hash.Hash, payload []byte) (jwsDto, error
 	out.Sig = base64.RawURLEncoding.EncodeToString(hash.Sum(nil))
 
 	return out, nil
-}
-
-type jwsMACHeader struct {
-	Alg string `json:"alg"`
-	URL string `json:"url"`
-	KID string `json:"kid"`
-}
-
-type jwsHeaderRequiredFields struct {
-	Alg   string `json:"alg"`
-	URL   string `json:"url"`
-	Nonce string `json:"nonce,omitempty"`
-}
-
-type jwsHeaderWithKID struct {
-	KID string `json:"kid"`
-	jwsHeaderRequiredFields
-}
-
-type jwsHeaderWithJWK struct {
-	JWK jwk `json:"jwk"`
-	jwsHeaderRequiredFields
 }
