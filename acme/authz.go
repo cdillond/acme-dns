@@ -7,17 +7,17 @@ import (
 	"time"
 )
 
-type FailedError string
+type FailedChallengeError string
 
-func (f FailedError) Error() string {
+func (f FailedChallengeError) Error() string {
 	return "failed: " + string(f)
 }
 
 const (
-	ErrFailedAccount   FailedError = "account"
-	ErrFailedOrder     FailedError = "order"
-	ErrFailedAuthz     FailedError = "authz"
-	ErrFailedChallenge FailedError = "challenge"
+	ErrFailedAccount   FailedChallengeError = "account"
+	ErrFailedOrder     FailedChallengeError = "order"
+	ErrFailedAuthz     FailedChallengeError = "authz"
+	ErrFailedChallenge FailedChallengeError = "challenge"
 )
 
 type authz struct {

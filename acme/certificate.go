@@ -39,7 +39,7 @@ type certRevocationRequest struct {
 
 // RevokeCert revokes a certificate. For a [Certificate] returned from [Client.OrderCertificate], only the
 // initial [*x509.Certificate] in [Certificate.Chain] should be revoked.
-func (c Client) RevokeCert(ctx context.Context, cert *x509.Certificate, accountKey AccountKey, reason RevocationReason) error {
+func (c Client) RevokeCert(ctx context.Context, account Account, cert *x509.Certificate, reason RevocationReason) error {
 	var (
 		err     error
 		payload []byte
@@ -60,7 +60,7 @@ func (c Client) RevokeCert(ctx context.Context, cert *x509.Certificate, accountK
 		return err
 	}
 
-	if res, err = c.signedPost(ctx, c.dir.RevokeCert, accountKey.es256Key, payload); err != nil {
+	if res, err = c.signedPostID(ctx, c.Dir.RevokeCert, account.ID, account.Key.es256Key, payload); err != nil {
 		return err
 	}
 

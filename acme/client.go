@@ -33,11 +33,11 @@ const (
 	UserAgent = "go.ciaran.lol/acme-dns"
 )
 
+var postAsGetPayload = []byte{}
+
 type Client struct {
-	CADirURL CADirURL
-	Log      *slog.Logger
-	dir      acmeDirectory
-	nonce    string
+	Dir ACMEDirectory
+	Log *slog.Logger
 }
 
 func (c Client) requestNonce(ctx context.Context) (string, error) {
@@ -48,7 +48,7 @@ func (c Client) requestNonce(ctx context.Context) (string, error) {
 		res *http.Response
 	)
 
-	if req, err = http.NewRequest(http.MethodHead, c.dir.NewNonce, nil); err != nil {
+	if req, err = http.NewRequest(http.MethodHead, c.Dir.NewNonce, nil); err != nil {
 		return s, err
 	}
 
@@ -64,39 +64,21 @@ func (c Client) requestNonce(ctx context.Context) (string, error) {
 	return s, err
 }
 
-func (c Client) jws(ctx context.Context, url string, key es256Key, payload []byte) ([]byte, error) {
+func (c Client) signedPostID(ctx context.Context, url, id string, key es256Key, payload []byte) (*http.Response, error) {
 	var (
-		nonce string
+		req   *http.Request
+		res   *http.Response
 		err   error
-		dto   jwsDto
-		b     []byte
+		jws   []byte
+		nonce string
 	)
 
 	if nonce, err = c.requestNonce(ctx); err != nil {
-		return b, err
+		return nil, err
 	}
 
-	if dto, err = sign(url, key, payload, nonce); err != nil {
-		return b, err
-	}
-
-	if b, err = json.Marshal(&dto); err != nil {
-		return b, err
-	}
-
-	return b, err
-}
-
-func (c Client) signedPost(ctx context.Context, url string, key es256Key, payload []byte) (*http.Response, error) {
-	var (
-		req *http.Request
-		res *http.Response
-		err error
-		jws []byte
-	)
-
-	if jws, err = c.jws(ctx, url, key, payload); err != nil {
-		return res, err
+	if jws, err = key.signKID(url, id, payload, nonce); err != nil {
+		return nil, err
 	}
 
 	if req, err = http.NewRequest(http.MethodPost, url, bytes.NewReader(jws)); err != nil {
@@ -109,56 +91,220 @@ func (c Client) signedPost(ctx context.Context, url string, key es256Key, payloa
 	return http.DefaultClient.Do(req)
 }
 
-func (c Client) signedPostAsGet(ctx context.Context, url string, key es256Key) (*http.Response, error) {
-	return c.signedPost(ctx, url, key, []byte{})
+func (c Client) signedPostJWK(ctx context.Context, url string, key es256Key, payload []byte) (*http.Response, error) {
+	var (
+		req   *http.Request
+		res   *http.Response
+		err   error
+		jws   []byte
+		nonce string
+	)
+
+	if nonce, err = c.requestNonce(ctx); err != nil {
+		return nil, err
+	}
+
+	if jws, err = key.signJWK(url, payload, nonce); err != nil {
+		return nil, err
+	}
+
+	if req, err = http.NewRequest(http.MethodPost, url, bytes.NewReader(jws)); err != nil {
+		return res, err
+	}
+
+	req.Header.Set("Content-Type", joseMIME)
+	req.Header.Set("User-Agent", UserAgent)
+
+	return http.DefaultClient.Do(req)
 }
 
-// RequestAccount requests a new or existing [Account] from the ACME server. If the information
-// provided in the [AccountCfg] argument matches an existing account, the server will return
+// RequestAccount requests a new or existing [Account] from the ACME server. If the provided [AccountKey]
+// matches an existing account, the server will return
 // the existing account and will otherwise create a new account, unless [AccountCfg.OnlyReturnExisting] is
-// set to true, in which case it will only return existing accounts and return an [error] instead
-// of creating a new account. The old return value indicates whether or not the account already
-// existed. If old is false, then the account was newly created, and vice-versa.
+// set to true, in which case it will only return existing accounts and return an error instead
+// of creating a new account.
 //
-// Note: The CA server is free to ignore data in the [AccountCfg.Contact], [AccountCfg.TermsOfServiceAgreed],
-// and [AccountCfg.ExternalAccountBinding] fields, and the corresponding values in the returned [Account] object might
-// not reflect the actual values stored by the CA.
-func (c Client) RequestAccount(ctx context.Context, a AccountCfg) (acc Account, old bool, err error) {
+// Note: The ACME server is free to ignore data in the [AccountCfg.Contact] and [AccountCfg.TermsOfServiceAgreed],
+// fields, and the corresponding values in the returned [AccountData] object might
+// not reflect the actual values stored by the CA. Additionally, the [AccountData.CreatedAt] at field is non-standard
+// and may not be provided by the server; other non-standard response fields are discarded.
+func (c Client) RequestAccount(ctx context.Context, key AccountKey, cfg AccountCfg) (acc Account, data AccountData, err error) {
 	var (
 		raw []byte
 		dto accountResponse
 		res *http.Response
 		dec *jsontext.Decoder
+		bad Problem
+		loc string
 	)
 
-	if raw, err = json.Marshal(a); err != nil {
-		return acc, false, err
+	if c.Dir.Meta.ExternalAccountRequired {
+		return acc, data, errors.New("external account binding is required by the ACME server")
 	}
 
-	if res, err = c.signedPost(ctx, c.dir.NewAccount, a.AccountKey.es256Key, raw); err != nil {
-		return acc, false, err
+	if raw, err = json.Marshal(cfg); err != nil {
+		return acc, data, err
+	}
+
+	if res, err = c.signedPostJWK(ctx, c.Dir.NewAccount, key.es256Key, raw); err != nil {
+		return acc, data, err
 	}
 
 	defer func() {
 		err = errors.Join(err, res.Body.Close())
 	}()
 
+	dec = jsontext.NewDecoder(res.Body)
+
 	if res.StatusCode != http.StatusOK && res.StatusCode != http.StatusCreated {
-		return acc, false, errors.New("server responded with an unexpected status: " + res.Status)
+		if err = json.UnmarshalDecode(dec, &bad); err != nil {
+			return acc, data, errors.Join(err, errors.New("server responded with an unexpected status: "+res.Status))
+		}
+		return acc, data, &bad
 	}
+
+	if loc = res.Header.Get("Location"); loc == "" {
+		return acc, data, errors.New("no account ID provided by the server")
+	}
+
+	if err = json.UnmarshalDecode(dec, &dto); err != nil {
+		return acc, data, err
+	}
+
+	if data, err = newAccountData(cfg, dto); err != nil {
+		return acc, AccountData{}, err
+	}
+
+	acc.ID = loc
+	acc.Key = key
+
+	return acc, data, err
+}
+
+func (c Client) RequestAccountWithEAB(ctx context.Context, key AccountKey, eab EABRequest, cfg AccountCfg) (acc Account, data AccountData, err error) {
+	var (
+		eabJWS   jwsDto
+		jwk      jwk
+		jwkBytes []byte
+		payload  []byte
+		res      *http.Response
+		dec      *jsontext.Decoder
+		loc      string
+		bad      Problem
+		dto      accountResponse
+	)
+
+	if !c.Dir.Meta.ExternalAccountRequired {
+		return acc, data, errors.New("external account binding not supported by this ACME server")
+	}
+	if eab.KID == "" {
+		return acc, data, errors.New("EABRequest KID field is required")
+	}
+	if eab.Alg == "" {
+		return acc, data, errors.New("EABRequest Alg field is required")
+	}
+
+	// step 1: calculate the jwk for the account key; this will be used both in the EAB and in the JWS
+
+	if jwk, err = key.jwk(); err != nil {
+		return acc, data, err
+	}
+
+	if jwkBytes, err = json.Marshal(&jwk, json.Deterministic(true)); err != nil {
+		return acc, data, err
+	}
+
+	if eabJWS, err = signMAC(c.Dir.NewAccount, eab.KID, eab.Alg, eab.Hash, jwkBytes); err != nil {
+		return acc, data, err
+	}
+
+	if payload, err = json.Marshal(&struct {
+		Eab jwsDto `json:"externalAccountBinding"`
+		AccountCfg
+	}{
+		Eab:        eabJWS,
+		AccountCfg: cfg,
+	}); err != nil {
+		return acc, data, err
+	}
+
+	if res, err = c.signedPostJWK(ctx, c.Dir.NewAccount, key.es256Key, payload); err != nil {
+		return acc, data, err
+	}
+
+	defer func() {
+		err = errors.Join(err, res.Body.Close())
+	}()
 
 	dec = jsontext.NewDecoder(res.Body)
 
-	if err = json.UnmarshalDecode(dec, &dto); err != nil {
-		return acc, false, err
+	if res.StatusCode != http.StatusOK && res.StatusCode != http.StatusCreated {
+		if err = json.UnmarshalDecode(dec, &bad); err != nil {
+			return acc, data, errors.Join(err, errors.New("server responded with an unexpected status: "+res.Status))
+		}
+		return acc, data, &bad
 	}
 
-	acc, err = newAccount(a, dto, res.Header.Get("Location"))
+	if loc = res.Header.Get("Location"); loc == "" {
+		return acc, data, errors.New("no account ID provided by the server")
+	}
 
-	return acc, res.StatusCode == http.StatusOK, err
+	if err = json.UnmarshalDecode(dec, &dto); err != nil {
+		return acc, data, err
+	}
+
+	if data, err = newAccountData(cfg, dto); err != nil {
+		return acc, AccountData{}, err
+	}
+
+	acc.ID = loc
+	acc.Key = key
+
+	return acc, data, err
 }
 
-func (c Client) newOrder(ctx context.Context, accountKey AccountKey, domainSlice []string, cfg OrderCfg) (order, error) {
+func (c Client) UpdateAccountContact(ctx context.Context, account Account, contacts []string) (AccountData, error) {
+	var (
+		err  error
+		b    []byte
+		bad  Problem
+		dec  *jsontext.Decoder
+		res  *http.Response
+		data AccountData
+	)
+
+	if b, err = json.Marshal(&struct {
+		Contact []string `json:"contact"`
+	}{
+		Contact: contacts,
+	}); err != nil {
+		return data, err
+	}
+	// here the account ID, or location, is the URL as well as the KID
+	if res, err = c.signedPostID(ctx, account.ID, account.ID, account.Key.es256Key, b); err != nil {
+		return data, err
+	}
+
+	defer func() {
+		err = errors.Join(err, res.Body.Close())
+	}()
+
+	dec = jsontext.NewDecoder(res.Body)
+
+	if res.StatusCode != http.StatusOK {
+		if err = json.UnmarshalDecode(dec, &bad); err != nil {
+			return data, err
+		}
+		err = &bad
+		return data, err
+	}
+
+	err = json.UnmarshalDecode(dec, &data)
+
+	return data, err
+}
+
+func (c Client) newOrder(ctx context.Context, account Account, domainSlice []string, cfg OrderCfg) (order, error) {
 	var (
 		out order
 		bad Problem
@@ -176,7 +322,7 @@ func (c Client) newOrder(ctx context.Context, accountKey AccountKey, domainSlice
 		return out, err
 	}
 
-	if res, err = c.signedPost(ctx, c.dir.NewOrder, accountKey.es256Key, raw); err != nil {
+	if res, err = c.signedPostID(ctx, c.Dir.NewOrder, account.ID, account.Key.es256Key, raw); err != nil {
 		return out, err
 	}
 
@@ -199,13 +345,11 @@ func (c Client) newOrder(ctx context.Context, accountKey AccountKey, domainSlice
 	}
 
 	out.location = res.Header.Get("Location")
-	out.domains = out.domains
-	//out.client = &c
 
 	return out, err
 }
 
-func (c Client) fetchUnmarshalAuthz(ctx context.Context, url string, key es256Key, out *authz) error {
+func (c Client) fetchUnmarshalAuthz(ctx context.Context, url, id string, key es256Key, out *authz) error {
 	var (
 		err error
 		res *http.Response
@@ -213,7 +357,7 @@ func (c Client) fetchUnmarshalAuthz(ctx context.Context, url string, key es256Ke
 		bad Problem
 	)
 
-	res, err = c.signedPostAsGet(ctx, url, key)
+	res, err = c.signedPostID(ctx, url, id, key, postAsGetPayload)
 	if err != nil {
 		return err
 	}
@@ -232,13 +376,13 @@ func (c Client) fetchUnmarshalAuthz(ctx context.Context, url string, key es256Ke
 		err = &bad
 	} else {
 		err = json.UnmarshalDecode(dec, out)
-		out.retryAfter.parseRetryAfter(res)
+		out.retryAfter.parse(res)
 	}
 
 	return err
 }
 
-func (c Client) fetchChallenge(ctx context.Context, url string, key es256Key, payload []byte) (rawChallenge, error) {
+func (c Client) fetchChallenge(ctx context.Context, url, id string, key es256Key, payload []byte) (rawChallenge, error) {
 	var (
 		out rawChallenge
 		res *http.Response
@@ -247,7 +391,7 @@ func (c Client) fetchChallenge(ctx context.Context, url string, key es256Key, pa
 		err error
 	)
 
-	if res, err = c.signedPost(ctx, url, key, payload); err != nil {
+	if res, err = c.signedPostID(ctx, url, id, key, payload); err != nil {
 		return out, err
 	}
 
@@ -266,7 +410,7 @@ func (c Client) fetchChallenge(ctx context.Context, url string, key es256Key, pa
 	} else {
 		err = json.UnmarshalDecode(dec, &out)
 		if err == nil {
-			out.retryAfter.parseRetryAfter(res)
+			out.retryAfter.parse(res)
 		}
 	}
 
@@ -275,18 +419,18 @@ func (c Client) fetchChallenge(ctx context.Context, url string, key es256Key, pa
 
 // fetchRawChallenge fetches the current state of a challenge without starting
 // validation.
-func (c Client) fetchRawChallenge(ctx context.Context, url string, key es256Key) (rawChallenge, error) {
-	return c.fetchChallenge(ctx, url, key, []byte{})
+func (c Client) fetchRawChallenge(ctx context.Context, url, id string, key es256Key) (rawChallenge, error) {
+	return c.fetchChallenge(ctx, url, id, key, []byte{})
 }
 
 // acceptChallenge tells the ACME server that the challenge response has been
 // provisioned and that validation should begin. Per RFC 8555 section 7.5.1,
 // this is a POST with an empty JSON object ("{}") to the challenge URL.
-func (c Client) acceptChallenge(ctx context.Context, url string, key es256Key) (rawChallenge, error) {
-	return c.fetchChallenge(ctx, url, key, []byte("{}"))
+func (c Client) acceptChallenge(ctx context.Context, url, id string, key es256Key) (rawChallenge, error) {
+	return c.fetchChallenge(ctx, url, id, key, []byte("{}"))
 }
 
-func (c Client) fetchAuthz(ctx context.Context, urls []string, key es256Key) ([]authz, error) {
+func (c Client) fetchAuthz(ctx context.Context, urls []string, id string, key es256Key) ([]authz, error) {
 	var (
 		err error
 		i   int
@@ -295,7 +439,7 @@ func (c Client) fetchAuthz(ctx context.Context, urls []string, key es256Key) ([]
 	)
 
 	for i, url = range urls {
-		if err = c.fetchUnmarshalAuthz(ctx, url, key, &out[i]); err != nil {
+		if err = c.fetchUnmarshalAuthz(ctx, url, id, key, &out[i]); err != nil {
 			return nil, err
 		}
 	}
@@ -330,19 +474,21 @@ func NewClient(ctx context.Context, CADirURL CADirURL, log *slog.Logger) (Client
 		return c, errors.New("server responded with an unexpected status: " + res.Status)
 	}
 
-	if err = json.UnmarshalDecode(dec, &c.dir); err != nil {
+	if err = json.UnmarshalDecode(dec, &c.Dir); err != nil {
 		return c, err
 	}
 
-	c.CADirURL = CADirURL
 	c.Log = log
 
 	return c, nil
 }
 
-func (c *Client) OrderCertificate(ctx context.Context, accountKey AccountKey, domains map[string]Provider, cfg OrderCfg) (Certificate, error) {
-	if accountKey.id == "" {
-		return Certificate{}, errors.New("uninitialized AccountKey")
+func (c Client) OrderCertificate(ctx context.Context, account Account, domains map[string]Provider, cfg OrderCfg) (Certificate, error) {
+	if account.Key.pk == nil {
+		return Certificate{}, errors.New("uninitialized account Key")
+	}
+	if account.ID == "" {
+		return Certificate{}, errors.New("uninitialized account ID")
 	}
 	if len(domains) == 0 {
 		return Certificate{}, errors.New("order must include at least 1 domain")
@@ -350,12 +496,12 @@ func (c *Client) OrderCertificate(ctx context.Context, accountKey AccountKey, do
 
 	s := slices.Collect(maps.Keys(domains))
 
-	o, err := c.newOrder(ctx, accountKey, s, cfg)
+	o, err := c.newOrder(ctx, account, s, cfg)
 	if err != nil {
 		return Certificate{}, err
 	}
 
-	b, key, err := c.attempt(ctx, &o, accountKey.es256Key, s, cfg)
+	b, key, err := c.attempt(ctx, &o, account.ID, account.Key.es256Key, s, domains, cfg)
 	if err != nil {
 		return Certificate{}, err
 	}

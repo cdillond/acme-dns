@@ -8,6 +8,7 @@ import (
 	"encoding/json/jsontext"
 	"encoding/json/v2"
 	"errors"
+	"hash"
 	"math/big"
 )
 
@@ -63,7 +64,7 @@ type jwsDto struct {
 	Sig       string `json:"signature"`
 }
 
-func sign(url string, key es256Key, payload []byte, nonce string) (jwsDto, error) {
+func sign(url, id string, key es256Key, payload []byte, nonce string) (jwsDto, error) {
 	var (
 		out       jwsDto
 		err       error
@@ -78,7 +79,7 @@ func sign(url string, key es256Key, payload []byte, nonce string) (jwsDto, error
 		}
 	)
 
-	if key.id == "" {
+	if id == "" {
 		x := jwsHeaderWithJWK{
 			jwsHeaderRequiredFields: h,
 		}
@@ -93,7 +94,7 @@ func sign(url string, key es256Key, payload []byte, nonce string) (jwsDto, error
 	} else {
 		x := jwsHeaderWithKID{
 			jwsHeaderRequiredFields: h,
-			KID:                     key.id,
+			KID:                     id,
 		}
 		if protected, err = json.Marshal(&x); err != nil {
 			return out, err
@@ -119,10 +120,44 @@ func sign(url string, key es256Key, payload []byte, nonce string) (jwsDto, error
 	return out, nil
 }
 
+func signMAC(url, id, alg string, hash hash.Hash, payload []byte) (jwsDto, error) {
+	var (
+		out       jwsDto
+		err       error
+		protected []byte
+		h         = jwsMACHeader{
+			Alg: alg,
+			URL: url,
+			KID: id,
+		}
+	)
+
+	if protected, err = json.Marshal(&h); err != nil {
+		return out, err
+	}
+
+	out.Protected = base64.RawURLEncoding.EncodeToString(protected)
+	out.Payload = base64.RawURLEncoding.EncodeToString(payload)
+
+	if _, err = hash.Write([]byte(out.Protected + "." + out.Payload)); err != nil {
+		return out, err
+	}
+
+	out.Sig = base64.RawURLEncoding.EncodeToString(hash.Sum(nil))
+
+	return out, nil
+}
+
+type jwsMACHeader struct {
+	Alg string `json:"alg"`
+	URL string `json:"url"`
+	KID string `json:"kid"`
+}
+
 type jwsHeaderRequiredFields struct {
 	Alg   string `json:"alg"`
 	URL   string `json:"url"`
-	Nonce string `json:"nonce"`
+	Nonce string `json:"nonce,omitempty"`
 }
 
 type jwsHeaderWithKID struct {

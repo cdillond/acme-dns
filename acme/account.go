@@ -1,12 +1,18 @@
 package acme
 
 import (
-	"bytes"
 	"encoding/json/jsontext"
 	"errors"
+	"hash"
 	"slices"
 	"time"
 )
+
+type EABRequest struct {
+	KID  string
+	Alg  string
+	Hash hash.Hash
+}
 
 type ExternalAccountBinding jsontext.Value
 
@@ -81,25 +87,30 @@ func (a *AccountStatus) UnmarshalJSONFrom(dec *jsontext.Decoder) error {
 }
 
 type AccountCfg struct {
-	AccountKey             AccountKey             `json:"-"`
-	Contact                []string               `json:"contact,omitempty"`
-	TermsOfServiceAgreed   bool                   `json:"termsOfServiceAgreed"`
-	OnlyReturnExisting     bool                   `json:"onlyReturnExisting"`
-	ExternalAccountBinding ExternalAccountBinding `json:"externalAccountBinding,omitempty"`
+	Contact              []string `json:"contact,omitempty"`
+	TermsOfServiceAgreed bool     `json:"termsOfServiceAgreed,omitzero"`
+	OnlyReturnExisting   bool     `json:"onlyReturnExisting,omitzero"`
+	//ExternalAccountBinding ExternalAccountBinding `json:"externalAccountBinding,omitempty"`
 }
 
-func NewAccountCfg(contacts []string, key AccountKey) AccountCfg {
-	return AccountCfg{
-		AccountKey:             key,
-		Contact:                contacts,
-		TermsOfServiceAgreed:   true,
-		OnlyReturnExisting:     false,
-		ExternalAccountBinding: nil,
-	}
+type Account struct {
+	ID  string
+	Key AccountKey
+}
+
+// [AccountData] represents the data associated with an account as returned by an ACME server.
+// The server is not required to return all fields, so, with the exception of
+// [AccountData.Status], it should be regarded as informational.
+type AccountData struct {
+	Status                 AccountStatus          `json:"status"`
+	CreatedAt              time.Time              `json:"createdAt"`
+	Contact                []string               `json:"contact"`
+	ExternalAccountBinding ExternalAccountBinding `json:"externalAccountBinding"`
+	TermsOfServiceAgreed   bool                   `json:"termsOfServiceAgreed"`
+	Orders                 string                 `json:"orders"`
 }
 
 type accountResponse struct {
-	Key                    jwk                     `json:"key"`
 	Status                 AccountStatus           `json:"status"`
 	CreatedAt              time.Time               `json:"createdAt"`
 	Contact                *[]string               `json:"contact"`
@@ -108,41 +119,28 @@ type accountResponse struct {
 	Orders                 string                  `json:"orders"`
 }
 
-func newAccount(req AccountCfg, res accountResponse, loc string) (Account, error) {
-	if loc == "" {
-		return Account{}, errors.New("invalid location")
-	}
+func newAccountData(cfg AccountCfg, res accountResponse) (AccountData, error) {
 
-	thumb, err := res.Key.appendThumbprint(make([]byte, 0, 32))
-	if err != nil {
-		return Account{}, err
-	}
-	if !bytes.Equal(req.AccountKey.es256Key.thumbprint, thumb) {
-		return Account{}, errors.New("returned key does not match expected thumbprint")
-	}
 	if res.Status == accountStatusUnspecified || !res.Status.isValid() {
-		return Account{}, errors.New("invalid account status")
+		return AccountData{}, errors.New("invalid account status")
 	}
 
-	contact := req.Contact
+	contact := cfg.Contact
 	if res.Contact != nil {
 		contact = *res.Contact
 	}
-	eab := req.ExternalAccountBinding
+	var eab ExternalAccountBinding
+	//eab := cfg.ExternalAccountBinding
 	if res.ExternalAccountBinding != nil {
 		eab = *res.ExternalAccountBinding
 	}
 
-	tos := req.TermsOfServiceAgreed
+	tos := cfg.TermsOfServiceAgreed
 	if res.TermsOfServiceAgreed != nil && tos != *res.TermsOfServiceAgreed {
-		return Account{}, errors.New("terms of service agreement mismatch")
+		return AccountData{}, errors.New("terms of service agreement mismatch")
 	}
 
-	return Account{
-		AccountKey: AccountKey{
-			id:         loc,
-			pk:         req.AccountKey.pk,
-			thumbprint: req.AccountKey.thumbprint},
+	return AccountData{
 		CreatedAt:              res.CreatedAt,
 		Status:                 res.Status,
 		Contact:                contact,
@@ -150,14 +148,4 @@ func newAccount(req AccountCfg, res accountResponse, loc string) (Account, error
 		ExternalAccountBinding: eab,
 		Orders:                 res.Orders,
 	}, nil
-}
-
-type Account struct {
-	AccountKey             AccountKey             `json:"-"`
-	CreatedAt              time.Time              `json:"createdAt"`
-	Status                 AccountStatus          `json:"status"`
-	Contact                []string               `json:"contact"`
-	TermsOfServiceAgreed   bool                   `json:"termsOfServiceAgreed"`
-	ExternalAccountBinding ExternalAccountBinding `json:"externalAccountBinding"`
-	Orders                 string                 `json:"orders"`
 }
