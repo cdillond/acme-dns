@@ -181,6 +181,8 @@ func (c Client) RequestAccount(ctx context.Context, key AccountKey, cfg AccountC
 	return acc, data, err
 }
 
+// RequestAccountWithEAB requests an account with external account binding. This feature is not supported by most public/free
+// CAs, including Let's Encrypt.
 func (c Client) RequestAccountWithEAB(ctx context.Context, key AccountKey, eab EABRequest, cfg AccountCfg) (acc Account, data AccountData, err error) {
 	var (
 		eabJWS   jwsDto
@@ -447,7 +449,7 @@ func (c Client) fetchAuthz(ctx context.Context, urls []string, id string, key es
 	return out, nil
 }
 
-func NewClient(ctx context.Context, CADirURL CADirURL, log *slog.Logger) (Client, error) {
+func NewClient(ctx context.Context, url string, log *slog.Logger) (Client, error) {
 	var (
 		c   Client
 		err error
@@ -456,7 +458,7 @@ func NewClient(ctx context.Context, CADirURL CADirURL, log *slog.Logger) (Client
 		dec *jsontext.Decoder
 	)
 
-	if req, err = http.NewRequest(http.MethodGet, string(CADirURL), nil); err != nil {
+	if req, err = http.NewRequest(http.MethodGet, url, nil); err != nil {
 		return c, err
 	}
 
