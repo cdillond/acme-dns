@@ -263,6 +263,53 @@ func (c Client) RequestAccountWithEAB(ctx context.Context, key AccountKey, eab E
 	return acc, data, err
 }
 
+// DeactivateAccount deactivates an account. If it succeeds, all pending and future requests authorized by the
+// account key will return an unauthorized response.
+func (c Client) DeactivateAccount(ctx context.Context, account Account) (AccountData, error) {
+	var (
+		err  error
+		b    []byte
+		bad  Problem
+		dec  *jsontext.Decoder
+		res  *http.Response
+		data AccountData
+	)
+
+	if b, err = json.Marshal(&struct {
+		Status AccountStatus `json:"status"`
+	}{
+		Status: AccountStatusDeactivated,
+	}); err != nil {
+		return data, err
+	}
+
+	if res, err = c.signedPostID(ctx, account.ID, account.ID, account.Key.es256Key, b); err != nil {
+		return data, err
+	}
+
+	defer func() {
+		err = errors.Join(err, res.Body.Close())
+	}()
+
+	dec = jsontext.NewDecoder(res.Body)
+
+	if res.StatusCode != http.StatusOK {
+		if err = json.UnmarshalDecode(dec, &bad); err != nil {
+			return data, err
+		}
+		err = &bad
+		return data, err
+	}
+
+	err = json.UnmarshalDecode(dec, &data)
+
+	return data, err
+}
+
+// UpdateAccountContact updates the contacts for an account. The contacts parameter must contain contacts in a form
+// supported by the ACME server. For example, Let's Encrypt accepts contacts of the form "mailto:example@example.com".
+// On success, the returned error will be nil, but the returned [AccountData] object may or may not reflect the new
+// contacts.
 func (c Client) UpdateAccountContact(ctx context.Context, account Account, contacts []string) (AccountData, error) {
 	var (
 		err  error
@@ -302,6 +349,68 @@ func (c Client) UpdateAccountContact(ctx context.Context, account Account, conta
 	err = json.UnmarshalDecode(dec, &data)
 
 	return data, err
+}
+
+func (c Client) UpdateAccountKey(ctx context.Context, account Account, newKey AccountKey) (Account, error) {
+	var (
+		out          Account
+		err          error
+		innerPayload []byte
+		payload      []byte
+		bad          Problem
+		dec          *jsontext.Decoder
+		res          *http.Response
+		j            jwk
+		h            jwsHeaderWithJWK
+	)
+
+	// The request consists of an outer jws, signed with the old key, that contains an inner jws, signed by the new key.
+	// The inner jws has a payload consisting of the account ID and the old key's jwk.
+
+	if j, err = account.Key.newJWK(); err != nil {
+		return out, err
+	}
+
+	if innerPayload, err = json.Marshal(&struct {
+		ID  string `json:"account"`
+		Old jwk    `json:"oldKey"`
+	}{
+		account.ID,
+		j,
+	}); err != nil {
+		return out, err
+	}
+
+	if h, err = newKey.newJWSHeaderWithJWK(c.Dir.KeyChange, ""); err != nil {
+		return out, err
+	}
+
+	if payload, err = sign(newKey.es256Key, h, innerPayload); err != nil {
+		return out, err
+	}
+
+	// We can now make a normal post request, signed by the old key.
+	if res, err = c.signedPostID(ctx, c.Dir.KeyChange, account.ID, account.Key.es256Key, payload); err != nil {
+		return out, err
+	}
+
+	defer func() {
+		err = errors.Join(err, res.Body.Close())
+	}()
+
+	if res.StatusCode != http.StatusOK {
+		dec = jsontext.NewDecoder(res.Body)
+		if err = json.UnmarshalDecode(dec, &bad); err != nil {
+			return out, err
+		}
+		err = &bad
+		return out, err
+	}
+
+	out.ID = account.ID
+	out.Key = newKey
+
+	return out, err
 }
 
 func (c Client) newOrder(ctx context.Context, account Account, domainSlice []string, cfg OrderCfg) (order, error) {
