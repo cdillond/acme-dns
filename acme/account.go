@@ -86,13 +86,20 @@ func (a *AccountStatus) UnmarshalJSONFrom(dec *jsontext.Decoder) error {
 	return nil
 }
 
+// An [AccountCfg] contains optional parameters for account registration.
 type AccountCfg struct {
-	Contact              []string `json:"contact,omitempty"`
-	TermsOfServiceAgreed bool     `json:"termsOfServiceAgreed,omitzero"`
-	OnlyReturnExisting   bool     `json:"onlyReturnExisting,omitzero"`
-	//ExternalAccountBinding ExternalAccountBinding `json:"externalAccountBinding,omitempty"`
+	// A slice of contacts. These strings must be in a format accepted by the ACME server.
+	// For example, Let's Encrypt accepts contacts in the form "mailto:foo@example.com".
+	Contact []string `json:"contact,omitempty"`
+	// Indicates whether the user agrees to the terms of service. If this field is required,
+	// the terms of service can be found at the URL named by the [Client.Dir.Meta.TermsOfService] field.
+	TermsOfServiceAgreed bool `json:"termsOfServiceAgreed,omitzero"`
+	// If true, the ACME server will not create a new account and instead return an error if
+	// an account for a specified key does not already exist.
+	OnlyReturnExisting bool `json:"onlyReturnExisting,omitzero"`
 }
 
+// An [Account] represents an account registered with an ACME server.
 type Account struct {
 	ID  string
 	Key AccountKey
@@ -108,44 +115,4 @@ type AccountData struct {
 	ExternalAccountBinding ExternalAccountBinding `json:"externalAccountBinding"`
 	TermsOfServiceAgreed   bool                   `json:"termsOfServiceAgreed"`
 	Orders                 string                 `json:"orders"`
-}
-
-type accountResponse struct {
-	Status                 AccountStatus           `json:"status"`
-	CreatedAt              time.Time               `json:"createdAt"`
-	Contact                *[]string               `json:"contact"`
-	ExternalAccountBinding *ExternalAccountBinding `json:"externalAccountBinding"`
-	TermsOfServiceAgreed   *bool                   `json:"termsOfServiceAgreed"`
-	Orders                 string                  `json:"orders"`
-}
-
-func newAccountData(cfg AccountCfg, res accountResponse) (AccountData, error) {
-
-	if res.Status == accountStatusUnspecified || !res.Status.isValid() {
-		return AccountData{}, errors.New("invalid account status")
-	}
-
-	contact := cfg.Contact
-	if res.Contact != nil {
-		contact = *res.Contact
-	}
-	var eab ExternalAccountBinding
-	//eab := cfg.ExternalAccountBinding
-	if res.ExternalAccountBinding != nil {
-		eab = *res.ExternalAccountBinding
-	}
-
-	tos := cfg.TermsOfServiceAgreed
-	if res.TermsOfServiceAgreed != nil && tos != *res.TermsOfServiceAgreed {
-		return AccountData{}, errors.New("terms of service agreement mismatch")
-	}
-
-	return AccountData{
-		CreatedAt:              res.CreatedAt,
-		Status:                 res.Status,
-		Contact:                contact,
-		TermsOfServiceAgreed:   tos,
-		ExternalAccountBinding: eab,
-		Orders:                 res.Orders,
-	}, nil
 }

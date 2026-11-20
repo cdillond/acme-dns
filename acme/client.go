@@ -139,7 +139,6 @@ func (c Client) signedPostJWK(ctx context.Context, url string, key es256Key, pay
 func (c Client) RequestAccount(ctx context.Context, key AccountKey, cfg AccountCfg) (acc Account, data AccountData, err error) {
 	var (
 		raw []byte
-		dto accountResponse
 		res *http.Response
 		dec *jsontext.Decoder
 		bad Problem
@@ -175,12 +174,8 @@ func (c Client) RequestAccount(ctx context.Context, key AccountKey, cfg AccountC
 		return acc, data, errors.New("no account ID provided by the server")
 	}
 
-	if err = json.UnmarshalDecode(dec, &dto); err != nil {
+	if err = json.UnmarshalDecode(dec, &data); err != nil {
 		return acc, data, err
-	}
-
-	if data, err = newAccountData(cfg, dto); err != nil {
-		return acc, AccountData{}, err
 	}
 
 	acc.ID = loc
@@ -201,7 +196,6 @@ func (c Client) RequestAccountWithEAB(ctx context.Context, key AccountKey, eab E
 		dec      *jsontext.Decoder
 		loc      string
 		bad      Problem
-		dto      accountResponse
 	)
 
 	if !c.Dir.Meta.ExternalAccountRequired {
@@ -259,12 +253,8 @@ func (c Client) RequestAccountWithEAB(ctx context.Context, key AccountKey, eab E
 		return acc, data, errors.New("no account ID provided by the server")
 	}
 
-	if err = json.UnmarshalDecode(dec, &dto); err != nil {
+	if err = json.UnmarshalDecode(dec, &data); err != nil {
 		return acc, data, err
-	}
-
-	if data, err = newAccountData(cfg, dto); err != nil {
-		return acc, AccountData{}, err
 	}
 
 	acc.ID = loc

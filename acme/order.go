@@ -89,6 +89,7 @@ func (u UnexpectedOrderStatusError) Error() string {
 	return "unexpected order status: " + orderStatus(u).String()
 }
 
+// Optional configuration parameters for [Client.OrderCertificate]
 type OrderCfg struct {
 	// Optional: not supported by all CAs.
 	NotBefore time.Time
@@ -127,10 +128,7 @@ type order struct {
 	CertificateURL string       `json:"certificate"`
 	Error          *Problem     `json:"error,omitzero"`
 
-	location string `json:"-"`
-	//client     *Client             `json:"-"`
-	//account    *Account            `json:"-"`
-	//domains    map[string]Provider `json:"-"`
+	location   string     `json:"-"`
 	retryAfter retryAfter `json:"-"`
 }
 
