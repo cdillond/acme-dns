@@ -58,7 +58,7 @@ type jwsHeader interface {
 	jwsHeaderWithJWK | jwsHeaderWithKID
 }
 
-func sign[T jwsHeader](key es256Key, h T, payload []byte) ([]byte, error) {
+func jwsBytes[T jwsHeader](key es256Key, h T, payload []byte) ([]byte, error) {
 	var (
 		b         []byte
 		protected []byte

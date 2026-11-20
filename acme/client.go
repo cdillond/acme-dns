@@ -80,7 +80,7 @@ func (c Client) signedPostID(ctx context.Context, url, id string, key es256Key, 
 
 	h = key.newJWSHeaderWithKID(url, id, nonce)
 
-	if jws, err = sign(key, h, payload); err != nil {
+	if jws, err = jwsBytes(key, h, payload); err != nil {
 		return nil, err
 	}
 
@@ -112,7 +112,7 @@ func (c Client) signedPostJWK(ctx context.Context, url string, key es256Key, pay
 		return nil, err
 	}
 
-	if jws, err = sign(key, h, payload); err != nil {
+	if jws, err = jwsBytes(key, h, payload); err != nil {
 		return nil, err
 	}
 
@@ -385,7 +385,7 @@ func (c Client) UpdateAccountKey(ctx context.Context, account Account, newKey Ac
 		return out, err
 	}
 
-	if payload, err = sign(newKey.es256Key, h, innerPayload); err != nil {
+	if payload, err = jwsBytes(newKey.es256Key, h, innerPayload); err != nil {
 		return out, err
 	}
 
