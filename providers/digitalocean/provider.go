@@ -1,189 +1,167 @@
-package digitalocean
+// Package do implements an ACME DNS provider using the DigitalOcean godo SDK.
+package do
 
 import (
-	"bytes"
 	"context"
-	"encoding/json/jsontext"
-	"encoding/json/v2"
 	"errors"
 	"fmt"
-	"io"
 	"log/slog"
 	"net/http"
 	"strings"
 
+	"github.com/digitalocean/godo"
+
 	"go.ciaran.lol/acme-dns/acme"
 )
 
-type ErrorResponse struct {
-	Id      string `json:"id"`
-	Message string `json:"message"`
+const providerName = "digitalocean"
+
+// domainsClient is the subset of godo's DomainsService used by Provider.
+type domainsClient interface {
+	CreateRecord(context.Context, string, *godo.DomainRecordEditRequest) (*godo.DomainRecord, *godo.Response, error)
+	DeleteRecord(context.Context, string, int) (*godo.Response, error)
 }
 
-func (e *ErrorResponse) Error() string {
-	return fmt.Sprintf("digitalocean error: {id: %s, message: %s}", e.Id, e.Message)
-}
-
-const (
-	BaseUrl = "https://api.digitalocean.com/v2/domains"
-)
-
+// Provider provisions ACME challenge TXT records in a DigitalOcean managed zone.
 type Provider struct {
-	token      string
+	client     domainsClient
 	baseDomain string
 }
 
-func NewProvider(token string, baseDomain string) *Provider {
+// NewProvider returns a Provider that manages records in baseDomain.
+func NewProvider(token, baseDomain string) *Provider {
+	client := godo.NewFromToken(token)
+	client.UserAgent = acme.UserAgent
+
 	return &Provider{
-		token:      token,
-		baseDomain: baseDomain,
+		client:     client.Domains,
+		baseDomain: normalizeDomain(baseDomain),
 	}
 }
 
-type domainRecordEditRequest struct {
-	Type     string `json:"type,omitempty"`
-	Name     string `json:"name,omitempty"`
-	Data     string `json:"data,omitempty"`
-	Priority int    `json:"priority"`
-	Port     int    `json:"port"`
-	TTL      int    `json:"ttl,omitempty"`
-	Weight   int    `json:"weight"`
-	Flags    int    `json:"flags"`
-	Tag      string `json:"tag,omitempty"`
-}
-
-type domainResponse struct {
-	domainRecord `json:"domain_record"`
-}
-
-type domainRecord struct {
-	ID       int    `json:"id,omitempty"`
-	Type     string `json:"type,omitempty"`
-	Name     string `json:"name,omitempty"`
-	Data     string `json:"data,omitempty"`
-	Priority int    `json:"priority"`
-	Port     int    `json:"port"`
-	TTL      int    `json:"ttl,omitempty"`
-	Weight   int    `json:"weight"`
-	Flags    int    `json:"flags"`
-	Tag      string `json:"tag,omitempty"`
-}
-
-func (p *Provider) do(ctx context.Context, method, url string, body io.Reader) (*http.Response, error) {
+// Provision creates the ACME challenge TXT record. The returned cleanup function
+// deletes the same record.
+func (p *Provider) Provision(ctx context.Context, record acme.TxtRecord) (acme.CleanupFunc, error) {
 	var (
-		err error
-		req *http.Request
+		log = logFromContext(ctx, record)
+		req = godo.DomainRecordEditRequest{
+			Type: "TXT",
+			Data: record.Value,
+			TTL:  int(record.TTL),
+		}
+		created *godo.DomainRecord
+		id      int
+		err     error
 	)
 
-	if req, err = http.NewRequest(method, url, body); err != nil {
+	if err = p.validate(); err != nil {
 		return nil, err
 	}
 
-	req.Header.Set("User-Agent", acme.UserAgent)
-	req.Header.Set("Authorization", "Bearer "+p.token)
+	if req.Name, err = relativeRecordName(record.Name, p.baseDomain); err != nil {
+		return nil, err
+	}
 
-	return http.DefaultClient.Do(req)
+	if log != nil {
+		log.InfoContext(ctx, "provisioning dns record")
+	}
+
+	created, _, err = p.client.CreateRecord(ctx, p.baseDomain, &req)
+	if err != nil {
+		return nil, fmt.Errorf("digitalocean: create TXT record %q: %w", record.Name, err)
+	}
+	if created == nil || created.ID <= 0 {
+		return nil, fmt.Errorf("digitalocean: create TXT record %q: no record ID returned", record.Name)
+	}
+
+	if log != nil {
+		log.InfoContext(ctx, "provisioned dns record", "record_id", created.ID)
+	}
+
+	id = created.ID
+
+	return func(cleanupCtx context.Context) error {
+		return p.deprovision(cleanupCtx, id)
+	}, nil
 }
 
-func (p *Provider) deprovision(ctx context.Context, id int) error {
+func (p *Provider) deprovision(ctx context.Context, recordID int) error {
 	var (
+		log    = logFromContext(ctx, acme.TxtRecord{})
+		apiErr *godo.ErrorResponse
 		err    error
-		url    string
-		res    *http.Response
-		bad    ErrorResponse
-		dec    *jsontext.Decoder
-		log, _ = ctx.Value(acme.LogKey{}).(*slog.Logger)
 	)
 
-	if log != nil {
-		log = log.With("provider", "digitalocean", "record_id", id)
-		log.Info("deprovisioning dns record")
-	}
-
-	url = fmt.Sprintf("%s/%s/records/%d", BaseUrl, p.baseDomain, id)
-
-	if res, err = p.do(ctx, http.MethodDelete, url, nil); err != nil {
+	if err = p.validate(); err != nil {
 		return err
 	}
+	if recordID <= 0 {
+		return fmt.Errorf("digitalocean: invalid record ID %d", recordID)
+	}
 
-	defer func() {
-		err = errors.Join(err, res.Body.Close())
-	}()
+	if log != nil {
+		log.InfoContext(ctx, "deprovisioning dns record")
+	}
 
-	dec = jsontext.NewDecoder(res.Body)
-
-	if res.StatusCode != http.StatusNoContent {
-		if err = json.UnmarshalDecode(dec, &bad); err != nil {
-			return err
+	_, err = p.client.DeleteRecord(ctx, p.baseDomain, recordID)
+	if err == nil {
+		if log != nil {
+			log.InfoContext(ctx, "deprovisioned dns record")
 		}
-		err = &bad
-		return err
+		return nil
 	}
 
-	if log != nil {
-		log.Info("deprovisioned dns record")
+	// A record that is already gone is treated as a successful cleanup.
+	if errors.As(err, &apiErr) && apiErr.Response != nil && apiErr.Response.StatusCode == http.StatusNotFound {
+		if log != nil {
+			log.InfoContext(ctx, "dns record already deleted")
+		}
+		return nil
 	}
 
+	return fmt.Errorf("digitalocean: delete TXT record %d: %w", recordID, err)
+}
+
+func (p *Provider) validate() error {
+	if p == nil || p.client == nil {
+		return errors.New("digitalocean: provider is not initialized")
+	}
+	if p.baseDomain == "" {
+		return errors.New("digitalocean: base domain is empty")
+	}
 	return nil
 }
 
-func (p *Provider) Provision(ctx context.Context, txt acme.TxtRecord) (acme.CleanupFunc, error) {
-	var (
-		err error
-		res *http.Response
-		ans domainResponse
-		bad ErrorResponse
-		dec *jsontext.Decoder
-		url = fmt.Sprintf("%s/%s/records", BaseUrl, p.baseDomain)
-		d   = domainRecordEditRequest{
-			Type: "TXT",
-			Name: txt.Name,
-			Data: txt.Value,
-			TTL:  int(txt.TTL),
-		}
-		buf    = new(bytes.Buffer)
-		enc    = jsontext.NewEncoder(buf)
-		log, _ = ctx.Value(acme.LogKey{}).(*slog.Logger)
-	)
+// relativeRecordName converts an ACME challenge FQDN into the relative name
+// expected by the DigitalOcean API.
+func relativeRecordName(fqdn, baseDomain string) (string, error) {
+	fqdn = normalizeDomain(fqdn)
 
-	if log != nil {
-		log = log.With("provider", "digitalocean", "record", txt)
-		log.Info("provisioning dns record")
+	if fqdn == "" {
+		return "", errors.New("digitalocean: empty TXT record name")
 	}
 
-	d.Name, _ = strings.CutSuffix(d.Name, "."+p.baseDomain)
-
-	if err = json.MarshalEncode(enc, d); err != nil {
-		return nil, err
+	if strings.EqualFold(fqdn, baseDomain) {
+		return "@", nil
 	}
 
-	if res, err = p.do(ctx, http.MethodPost, url, buf); err != nil {
-		return nil, err
+	suffix := "." + baseDomain
+	if len(fqdn) <= len(suffix) || !strings.EqualFold(fqdn[len(fqdn)-len(suffix):], suffix) {
+		return "", fmt.Errorf("digitalocean: TXT record %q is not in managed domain %q", fqdn, baseDomain)
 	}
 
-	defer func() {
-		err = errors.Join(err, res.Body.Close())
-	}()
+	return fqdn[:len(fqdn)-len(suffix)], nil
+}
 
-	dec = jsontext.NewDecoder(res.Body)
+func normalizeDomain(name string) string {
+	return strings.TrimSuffix(strings.TrimSpace(name), ".")
+}
 
-	if res.StatusCode != http.StatusCreated {
-		if err = json.UnmarshalDecode(dec, &bad); err != nil {
-			return nil, err
-		}
-		err = &bad
-		return nil, err
+func logFromContext(ctx context.Context, record acme.TxtRecord) *slog.Logger {
+	log, _ := ctx.Value(acme.LogKey{}).(*slog.Logger)
+	if log == nil {
+		return nil
 	}
 
-	if err = json.UnmarshalDecode(dec, &ans); err != nil {
-		return nil, err
-	}
-
-	if log != nil {
-		log.Info("provisioned dns record", "record_id", ans.ID)
-	}
-
-	return func(c context.Context) error {
-		return p.deprovision(c, ans.ID)
-	}, nil
+	return log.With("provider", providerName, "record", record)
 }
