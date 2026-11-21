@@ -27,10 +27,10 @@ type challenge struct {
 type challengeStatus uint32
 
 const (
-	ChallengeStatusInvalid challengeStatus = iota
-	ChallengeStatusPending
-	ChallengeStatusProcessing
-	ChallengeStatusValid
+	challengeStatusInvalid challengeStatus = iota
+	challengeStatusPending
+	challengeStatusProcessing
+	challengeStatusValid
 	challengeStatusUnknown
 )
 

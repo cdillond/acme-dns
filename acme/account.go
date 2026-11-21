@@ -37,10 +37,6 @@ const (
 	accountStatusUnknown
 )
 
-func (a AccountStatus) isValid() bool {
-	return a < accountStatusUnknown
-}
-
 var accountStrings = [accountStatusUnknown]string{
 	"",
 	"valid",
@@ -91,8 +87,9 @@ type AccountCfg struct {
 	// A slice of contacts. These strings must be in a format accepted by the ACME server.
 	// For example, Let's Encrypt accepts contacts in the form "mailto:foo@example.com".
 	Contact []string `json:"contact,omitempty"`
-	// Indicates whether the user agrees to the terms of service. If this field is required,
-	// the terms of service can be found at the URL named by the [Client.Dir.Meta.TermsOfService] field.
+	// Indicates whether the user agrees to the terms of service. CAs are free to disregard this field.
+	// If terms of service agreement is required by the CA, the terms of service can be found at the URL
+	// named by the [Client.Dir.Meta.TermsOfService] field.
 	TermsOfServiceAgreed bool `json:"termsOfServiceAgreed,omitzero"`
 	// If true, the ACME server will not create a new account and instead return an error if
 	// an account for a specified key does not already exist.

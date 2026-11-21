@@ -32,12 +32,12 @@ type authz struct {
 type authzStatus uint32
 
 const (
-	AuthzStatusInvalid authzStatus = iota
-	AuthzStatusPending
-	AuthzStatusValid
-	AuthzStatusDeactivated
-	AuthzStatusExpired
-	AuthzStatusRevoked
+	authzStatusInvalid authzStatus = iota
+	authzStatusPending
+	authzStatusValid
+	authzStatusDeactivated
+	authzStatusExpired
+	authzStatusRevoked
 	authzStatusUnknown
 )
 

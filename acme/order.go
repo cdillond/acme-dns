@@ -25,17 +25,13 @@ type Identifier struct {
 type orderStatus uint32
 
 const (
-	OrderStatusInvalid orderStatus = iota
-	OrderStatusPending
-	OrderStatusReady
-	OrderStatusProcessing
-	OrderStatusValid
+	orderStatusInvalid orderStatus = iota
+	orderStatusPending
+	orderStatusReady
+	orderStatusProcessing
+	orderStatusValid
 	orderStatusUnknown
 )
-
-func (o orderStatus) isValid() bool {
-	return o < orderStatusUnknown
-}
 
 var orderStrings = [orderStatusUnknown]string{
 	"invalid",
@@ -266,11 +262,11 @@ func (c *Client) validateAuthz(ctx context.Context, id string, key es256Key, az 
 
 	for err == nil {
 		switch raw.Status {
-		case ChallengeStatusProcessing:
+		case challengeStatusProcessing:
 			// keep polling; no retry limit
-		case ChallengeStatusValid:
+		case challengeStatusValid:
 			return nil
-		case ChallengeStatusInvalid:
+		case challengeStatusInvalid:
 			return ErrFailedChallenge
 		default:
 			return UnexpectedChallengeStatusError(raw.Status)
@@ -444,12 +440,12 @@ func (c *Client) pollForValidAuthz(ctx context.Context, urls []string, id string
 		}
 
 		switch authz.Status {
-		case AuthzStatusValid:
+		case authzStatusValid:
 			i++
 			continue
-		case AuthzStatusPending:
+		case authzStatusPending:
 			retries--
-		case AuthzStatusInvalid:
+		case authzStatusInvalid:
 			return ErrFailedAuthz
 		default:
 			return UnexpectedAuthzStatusError(authz.Status)
@@ -554,9 +550,9 @@ func (c *Client) submitFinalize(ctx context.Context, url, id string, key es256Ke
 	}
 
 	switch out.Status {
-	case OrderStatusProcessing:
+	case orderStatusProcessing:
 		// strictly speaking, OrderStatusProcessing is the only valid response
-	case OrderStatusInvalid:
+	case orderStatusInvalid:
 		return ErrFailedOrder
 	default:
 		return UnexpectedOrderStatusError(out.Status)
@@ -575,11 +571,11 @@ func (c *Client) pollForOrderReady(ctx context.Context, url, id string, key es25
 
 	for err = c.fetchOrder(ctx, url, id, key, out); err == nil && retries >= 0; err = c.fetchOrder(ctx, url, id, key, out) {
 		switch out.Status {
-		case OrderStatusPending:
+		case orderStatusPending:
 			// keep polling
-		case OrderStatusReady:
+		case orderStatusReady:
 			return nil
-		case OrderStatusInvalid:
+		case orderStatusInvalid:
 			return ErrFailedOrder
 		default:
 			return UnexpectedOrderStatusError(out.Status)
