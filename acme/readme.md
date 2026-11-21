@@ -37,13 +37,15 @@ func main() {
 		os.Exit(1)
 	}
 
-	fmt.Println(key.PrivateKey())
+	logger.InfoContext(ctx, "account key created", "key", key.PrivateKey())
 
 	account, data, err := c.RequestAccount(ctx, key, acme.AccountCfg{TermsOfServiceAgreed: true})
 	if err != nil {
 		logger.ErrorContext(ctx, err.Error())
 		os.Exit(1)
 	}
+
+    logger.InfoContext(ctx, "account created", "account_id", account.ID, "data", data)
 
 	cert, err := c.OrderCertificate(ctx, account, map[string]acme.Provider{
 		"*.example.com": digitalocean.NewProvider(tok, "example.com"),
@@ -54,7 +56,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	fmt.Println(cert)
+	logger.InfoContext(ctx, "order completed", "certificate", cert)
 }
 
 
