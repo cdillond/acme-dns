@@ -141,3 +141,16 @@ func (e es256Key) newJWSHeaderWithJWK(url, nonce string) (jwsHeaderWithJWK, erro
 		Nonce: nonce,
 	}, nil
 }
+
+func (e es256Key) newJWSHeaderNonceless(url string) (jwsHeaderNonceless, error) {
+	j, err := e.newJWK()
+	if err != nil {
+		return jwsHeaderNonceless{}, err
+	}
+
+	return jwsHeaderNonceless{
+		JWK: j,
+		Alg: "ES256",
+		URL: url,
+	}, nil
+}

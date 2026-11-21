@@ -351,17 +351,23 @@ func (c Client) UpdateAccountContact(ctx context.Context, account Account, conta
 	return data, err
 }
 
+type keyRollover struct {
+	AccountID string `json:"account"`
+	OldKey    jwk    `json:"oldKey"`
+}
+
 func (c Client) UpdateAccountKey(ctx context.Context, account Account, newKey AccountKey) (Account, error) {
 	var (
 		out          Account
 		err          error
+		k            keyRollover
 		innerPayload []byte
 		payload      []byte
 		bad          Problem
 		dec          *jsontext.Decoder
 		res          *http.Response
 		j            jwk
-		h            jwsHeaderWithJWK
+		h            jwsHeaderNonceless
 	)
 
 	// The request consists of an outer jws, signed with the old key, that contains an inner jws, signed by the new key.
@@ -371,17 +377,16 @@ func (c Client) UpdateAccountKey(ctx context.Context, account Account, newKey Ac
 		return out, err
 	}
 
-	if innerPayload, err = json.Marshal(&struct {
-		ID  string `json:"account"`
-		Old jwk    `json:"oldKey"`
-	}{
-		account.ID,
-		j,
-	}); err != nil {
+	k = keyRollover{
+		AccountID: account.ID,
+		OldKey:    j,
+	}
+
+	if innerPayload, err = json.Marshal(&k); err != nil {
 		return out, err
 	}
 
-	if h, err = newKey.newJWSHeaderWithJWK(c.Dir.KeyChange, ""); err != nil {
+	if h, err = newKey.newJWSHeaderNonceless(c.Dir.KeyChange); err != nil {
 		return out, err
 	}
 

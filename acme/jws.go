@@ -41,7 +41,7 @@ type jwsDto struct {
 type jwsHeaderRequiredFields struct {
 	Alg   string `json:"alg"`
 	URL   string `json:"url"`
-	Nonce string `json:"nonce,omitempty"`
+	Nonce string `json:"nonce"`
 }
 
 type jwsHeaderWithKID struct {
@@ -54,8 +54,14 @@ type jwsHeaderWithJWK struct {
 	jwsHeaderRequiredFields
 }
 
+type jwsHeaderNonceless struct {
+	Alg string `json:"alg"`
+	JWK jwk    `json:"jwk"`
+	URL string `json:"url"`
+}
+
 type jwsHeader interface {
-	jwsHeaderWithJWK | jwsHeaderWithKID
+	jwsHeaderWithJWK | jwsHeaderWithKID | jwsHeaderNonceless
 }
 
 func jwsBytes[T jwsHeader](key es256Key, h T, payload []byte) ([]byte, error) {
