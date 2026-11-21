@@ -3,7 +3,6 @@ package acme
 import (
 	"crypto/sha256"
 	"encoding/base64"
-	"encoding/json/jsontext"
 	"encoding/json/v2"
 	"hash"
 )
@@ -18,14 +17,10 @@ type jwk struct {
 }
 
 // append thumbprint appends the RFC 7638 SHA-256 thumbprint of the JWK to dst and returns it.
-func (k jwk) appendThumbprint(dst []byte) ([]byte, error) {
-	var (
-		h   = sha256.New()
-		enc = jsontext.NewEncoder(h)
-		err = json.MarshalEncode(enc, &k, json.Deterministic(true))
-	)
+func (k *jwk) appendThumbprint(dst []byte) ([]byte, error) {
+	h := sha256.New()
 
-	if err != nil {
+	if err := json.MarshalWrite(h, k, json.Deterministic(true)); err != nil {
 		return dst, err
 	}
 

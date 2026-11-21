@@ -9,6 +9,7 @@ import (
 	"encoding/json/jsontext"
 	"encoding/json/v2"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net"
@@ -166,18 +167,17 @@ func confirmTXT(ctx context.Context, record TxtRecord) (bool, error) {
 	return slices.Contains(s, record.Value), nil
 }
 
-func pollForDNS(ctx context.Context, record TxtRecord, fn DNSConfirmationFunc, retries int) error {
+func pollForDNS(ctx context.Context, log *slog.Logger, record TxtRecord, fn DNSConfirmationFunc, retries int) error {
 	var (
 		err       error
 		dnsErr    *net.DNSError
 		ok, found bool
 		n         = RetryError(retries)
-		log, _    = ctx.Value(LogKey{}).(*slog.Logger)
 	)
 
 	if log != nil {
 		log = log.With("record", record)
-		log.Info("querying dns")
+		log.InfoContext(ctx, "querying dns")
 	}
 
 	if fn == nil {
@@ -186,6 +186,9 @@ func pollForDNS(ctx context.Context, record TxtRecord, fn DNSConfirmationFunc, r
 
 	for ; retries >= 0; retries-- {
 		if found, err = fn(ctx, record); err != nil {
+			if log != nil {
+				log.WarnContext(ctx, "record not confirmed", "err", err)
+			}
 			if dnsErr, ok = errors.AsType[*net.DNSError](err); ok {
 				switch {
 				case dnsErr.IsNotFound, dnsErr.IsTemporary:
@@ -198,6 +201,9 @@ func pollForDNS(ctx context.Context, record TxtRecord, fn DNSConfirmationFunc, r
 		}
 
 		if found {
+			if log != nil {
+				log.InfoContext(ctx, "record propagation confirmed")
+			}
 			return nil
 		}
 
@@ -248,28 +254,46 @@ func (c *Client) provisionAuthz(ctx context.Context, key es256Key, az authz, dom
 
 func (c *Client) validateAuthz(ctx context.Context, id string, key es256Key, az authz) error {
 	var (
-		dns *challenge
-		raw rawChallenge
-		err error
+		dns            *challenge
+		raw            rawChallenge
+		err            error
+		pendingRetries = 3
 	)
+
+	defer func() {
+		if err != nil {
+			err = errors.Join(err, fmt.Errorf("unable to validate authz: %v", az))
+		}
+	}()
 
 	dns = filterChallenges(az.Challenges)
 	if dns == nil {
-		return errors.New("no dns challenge available for Authz")
+		err = errors.New("no dns challenge available for Authz")
+		return err
 	}
 
 	raw, err = c.acceptChallenge(ctx, dns.URL, id, key)
 
 	for err == nil {
 		switch raw.Status {
+		case challengeStatusPending:
+			// this shouldn't happen, but it can if the server lags
+			if pendingRetries == 0 {
+				err = UnexpectedChallengeStatusError(raw.Status)
+				return err
+			}
+
+			pendingRetries--
 		case challengeStatusProcessing:
 			// keep polling; no retry limit
 		case challengeStatusValid:
 			return nil
 		case challengeStatusInvalid:
-			return ErrFailedChallenge
+			err = ErrFailedChallenge
+			return err
 		default:
-			return UnexpectedChallengeStatusError(raw.Status)
+			err = UnexpectedChallengeStatusError(raw.Status)
+			return err
 		}
 
 		if err = pause(ctx, raw.retryAfter); err != nil {
@@ -306,6 +330,8 @@ type AttemptCfg struct {
 	DnsConfirmation DNSConfirmationFunc
 }
 
+const defaultRetries = 5
+
 func (c Client) attempt(ctx context.Context, o *order, id string, key es256Key, domains []string, providers map[string]Provider, cfg OrderCfg) (b []byte, certKey *ecdsa.PrivateKey, err error) {
 	var (
 		ch       chan error
@@ -333,6 +359,7 @@ func (c Client) attempt(ctx context.Context, o *order, id string, key es256Key, 
 
 	for _, az = range auths {
 		if txt, fn, err = c.provisionAuthz(ctx, key, az, providers); err != nil {
+			err = errors.Join(err, fmt.Errorf("unable to provision authz: %v", az))
 			return b, certKey, err
 		}
 
@@ -341,7 +368,8 @@ func (c Client) attempt(ctx context.Context, o *order, id string, key es256Key, 
 	}
 
 	for _, txt = range records {
-		if err = pollForDNS(ctx, txt, cfg.DnsConfirmation, 5); err != nil {
+		if err = pollForDNS(ctx, c.Log, txt, cfg.DnsConfirmation, defaultRetries); err != nil {
+			err = errors.Join(fmt.Errorf("unable to confirm dns record: %v", txt), err)
 			return b, certKey, err
 		}
 	}
@@ -368,27 +396,35 @@ func (c Client) attempt(ctx context.Context, o *order, id string, key es256Key, 
 		return b, certKey, err
 	}
 
-	if err = c.pollForValidAuthz(ctx, o.Authorizations, id, key, 5); err != nil {
+	if err = c.pollForValidAuthz(ctx, o.Authorizations, id, key, defaultRetries); err != nil {
+		err = errors.Join(err, errors.New("failed to confirm authz validity"))
 		return b, certKey, err
 	}
 
-	if err = c.pollForOrderReady(ctx, o.location, id, key, o, 5); err != nil {
+	if err = c.pollForOrderReady(ctx, o.location, id, key, o, defaultRetries); err != nil {
+		err = errors.Join(err, errors.New("failed to confirm order readiness"))
 		return b, certKey, err
 	}
 
 	if certKey, err = ecdsa.GenerateKey(elliptic.P256(), rand.Reader); err != nil {
+		err = errors.Join(err, errors.New("failed to generate certificate private key"))
 		return b, nil, err
 	}
 
 	if err = c.finalize(ctx, o.Finalize, id, domains, key, certKey, o); err != nil {
+		err = errors.Join(err, errors.New("failed to finalize order"))
 		return b, nil, err
 	}
 
-	if url, err = c.pollForCertURL(ctx, o.location, id, key, o, 5); err != nil {
+	if url, err = c.pollForCertURL(ctx, o.location, id, key, o, defaultRetries); err != nil {
+		err = errors.Join(err, errors.New("failed to obtain certificate URL"))
 		return b, nil, err
 	}
 
 	b, err = c.downloadCert(ctx, url, id, key)
+	if err != nil {
+		err = errors.Join(err, errors.New("failed to download certificate"))
+	}
 
 	return b, certKey, err
 }
