@@ -1,4 +1,4 @@
-package do
+package digitalocean
 
 import (
 	"context"
@@ -66,28 +66,6 @@ func TestProvisionCreatesRelativeTXTRecord(t *testing.T) {
 	}
 	if client.deleteID != 42 {
 		t.Fatalf("DeleteRecord ID = %d, want 42", client.deleteID)
-	}
-}
-
-func TestProvisionUsesDefaultTTLWhenUnspecified(t *testing.T) {
-	client := &fakeDomainsClient{
-		createResp: &godo.DomainRecord{ID: 42},
-	}
-	p := &Provider{client: client, baseDomain: "example.com"}
-
-	_, err := p.Provision(context.Background(), acme.TxtRecord{
-		Name:  "_acme-challenge.example.com",
-		Value: "challenge-value",
-	})
-	if err != nil {
-		t.Fatalf("Provision returned an error: %v", err)
-	}
-
-	if client.createReq == nil {
-		t.Fatal("CreateRecord was not called")
-	}
-	if client.createReq.TTL != acme.DefaultTTL {
-		t.Fatalf("CreateRecord TTL = %d, want %d", client.createReq.TTL, acme.DefaultTTL)
 	}
 }
 

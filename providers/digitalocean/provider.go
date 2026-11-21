@@ -1,5 +1,5 @@
-// Package do implements an ACME DNS provider using the DigitalOcean godo SDK.
-package do
+// Package digitalocean implements an ACME DNS provider using the DigitalOcean godo SDK.
+package digitalocean
 
 import (
 	"context"
@@ -16,7 +16,6 @@ import (
 
 const providerName = "digitalocean"
 
-// domainsClient is the subset of godo's DomainsService used by Provider.
 type domainsClient interface {
 	CreateRecord(context.Context, string, *godo.DomainRecordEditRequest) (*godo.DomainRecord, *godo.Response, error)
 	DeleteRecord(context.Context, string, int) (*godo.Response, error)
