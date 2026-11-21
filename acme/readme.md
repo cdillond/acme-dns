@@ -9,20 +9,19 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-    "os"
+	"os"
 
 	"go.ciaran.lol/acme-dns/acme"
 	"go.ciaran.lol/acme-dns/providers/digitalocean"
 )
 
-
 func main() {
-    ctx := context.Background()
-    logger := slog.Default()
+	ctx := context.Background()
+	logger := slog.Default()
 
-	tok := os.GetEnv("DO_TOKEN")
+	tok := os.Getenv("DO_TOKEN")
 	if tok == "" {
-        logger.ErrorContext(ctx, "no token")
+		logger.ErrorContext(ctx, "no token")
 		os.Exit(1)
 	}
 
@@ -38,13 +37,13 @@ func main() {
 		os.Exit(1)
 	}
 
-    fmt.Println(key.PrivateKey())
+	fmt.Println(key.PrivateKey())
 
 	account, data, err := c.RequestAccount(ctx, key, acme.AccountCfg{TermsOfServiceAgreed: true})
-    if err != nil {
-        logger.ErrorContext(ctx, err.Error())
+	if err != nil {
+		logger.ErrorContext(ctx, err.Error())
 		os.Exit(1)
-    }
+	}
 
 	cert, err := c.OrderCertificate(ctx, account, map[string]acme.Provider{
 		"*.example.com": digitalocean.NewProvider(tok, "example.com"),
