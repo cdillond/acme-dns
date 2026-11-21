@@ -42,8 +42,8 @@ func NewProvider(token, baseDomain string) *Provider {
 // deletes the same record.
 func (p *Provider) Provision(ctx context.Context, record acme.TxtRecord) (acme.CleanupFunc, error) {
 	var (
-		log = logFromContext(ctx, record)
-		req = godo.DomainRecordEditRequest{
+		log, _ = ctx.Value(acme.LogKey{}).(*slog.Logger)
+		req    = godo.DomainRecordEditRequest{
 			Type: "TXT",
 			Data: record.Value,
 			TTL:  int(record.TTL),
@@ -62,6 +62,7 @@ func (p *Provider) Provision(ctx context.Context, record acme.TxtRecord) (acme.C
 	}
 
 	if log != nil {
+		log = log.With("provider", providerName, "record", record)
 		log.InfoContext(ctx, "provisioning dns record")
 	}
 
@@ -86,7 +87,7 @@ func (p *Provider) Provision(ctx context.Context, record acme.TxtRecord) (acme.C
 
 func (p *Provider) deprovision(ctx context.Context, recordID int) error {
 	var (
-		log    = logFromContext(ctx, acme.TxtRecord{})
+		log, _ = ctx.Value(acme.LogKey{}).(*slog.Logger)
 		apiErr *godo.ErrorResponse
 		err    error
 	)
@@ -99,6 +100,7 @@ func (p *Provider) deprovision(ctx context.Context, recordID int) error {
 	}
 
 	if log != nil {
+		log = log.With("record_id", recordID)
 		log.InfoContext(ctx, "deprovisioning dns record")
 	}
 
@@ -154,13 +156,4 @@ func relativeRecordName(fqdn, baseDomain string) (string, error) {
 
 func normalizeDomain(name string) string {
 	return strings.TrimSuffix(strings.TrimSpace(name), ".")
-}
-
-func logFromContext(ctx context.Context, record acme.TxtRecord) *slog.Logger {
-	log, _ := ctx.Value(acme.LogKey{}).(*slog.Logger)
-	if log == nil {
-		return nil
-	}
-
-	return log.With("provider", providerName, "record", record)
 }
