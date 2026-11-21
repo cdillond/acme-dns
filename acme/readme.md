@@ -7,7 +7,6 @@ package main
 
 import (
 	"context"
-	"fmt"
 	"log/slog"
 	"os"
 
@@ -45,7 +44,7 @@ func main() {
 		os.Exit(1)
 	}
 
-    logger.InfoContext(ctx, "account created", "account_id", account.ID, "data", data)
+	logger.InfoContext(ctx, "account created", "account_id", account.ID, "data", data)
 
 	cert, err := c.OrderCertificate(ctx, account, map[string]acme.Provider{
 		"*.example.com": digitalocean.NewProvider(tok, "example.com"),
@@ -58,6 +57,5 @@ func main() {
 
 	logger.InfoContext(ctx, "order completed", "certificate", cert)
 }
-
 
 ```
