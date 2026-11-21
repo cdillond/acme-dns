@@ -11,6 +11,10 @@ import (
 	"net/http"
 )
 
+// Certificate holds a private key and an X509 certificate chain.
+// The leaf certificate will always be the initial element of the [Certificate.Chain] field.
+// The private key is generated as part of the certificate order. Its concrete type is *ecdsa.PrivateKey,
+// but other key types may be supported in the future.
 type Certificate struct {
 	PrivateKey crypto.PrivateKey
 	Chain      []*x509.Certificate

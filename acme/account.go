@@ -14,6 +14,9 @@ type EABRequest struct {
 	Hash hash.Hash
 }
 
+// ExternalAccountBinding holds raw JSON for an ACME external account binding,
+// which links an ACME account to an existing account with the CA. It is used by
+// CAs that require EAB; most public CAs, including Let's Encrypt, do not.
 type ExternalAccountBinding jsontext.Value
 
 func (e *ExternalAccountBinding) UnmarshalJSONFrom(dec *jsontext.Decoder) error {

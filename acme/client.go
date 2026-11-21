@@ -561,6 +561,8 @@ func (c Client) fetchAuthz(ctx context.Context, urls []string, id string, key es
 	return out, nil
 }
 
+// NewClient fetches the ACME directory at url and returns a Client using log. If log is nil
+// no logging is performed.
 func NewClient(ctx context.Context, url string, log *slog.Logger) (Client, error) {
 	var (
 		c   Client
@@ -597,6 +599,8 @@ func NewClient(ctx context.Context, url string, log *slog.Logger) (Client, error
 	return c, nil
 }
 
+// OrderCertificate orders and returns a certificate for domains, using the mapped
+// Providers for DNS-01 validation.
 func (c Client) OrderCertificate(ctx context.Context, account Account, domains map[string]Provider, cfg OrderCfg) (Certificate, error) {
 	if account.Key.pk == nil {
 		return Certificate{}, errors.New("uninitialized account Key")

@@ -4,5 +4,4 @@ use (
 	./acme
 	./cmd
 	./providers/digitalocean
-	./providers/do
 )

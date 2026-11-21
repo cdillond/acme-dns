@@ -11,6 +11,7 @@ import (
 	"math/big"
 )
 
+// AccountKey is an ES256 key used to sign ACME requests.
 type AccountKey struct {
 	es256Key
 }
