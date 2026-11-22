@@ -8,10 +8,7 @@ import (
 // the DNS record provisioned by [Provider.Provision].
 type CleanupFunc func(context.Context) error
 
-// A [Provider] updates a DNS record for a domain.
-// If a [Client]'s [Client.Log] field is non-nil, it will pass the logger to the
-// [Provider] via the [context.Context], keyed with an empty [LogKey], when calling
-// [Provider.Provision] and the returned [CleanupFunc].
+// A [Provider] updates a DNS record for a domain and returns a [CleanupFunc] callback that deprovisions the DNS record.
 type Provider interface {
 	Provision(context.Context, TxtRecord) (CleanupFunc, error)
 }

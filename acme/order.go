@@ -86,7 +86,7 @@ func (u UnexpectedOrderStatusError) Error() string {
 	return "unexpected order status: " + orderStatus(u).String()
 }
 
-// Optional configuration parameters for [Client.OrderCertificate]
+// Optional configuration parameters for [Client.OrderCertificate].
 type OrderCfg struct {
 	// Optional: not supported by all CAs.
 	NotBefore time.Time
@@ -167,12 +167,11 @@ func confirmTXT(ctx context.Context, record TxtRecord) (bool, error) {
 	return slices.Contains(s, record.Value), nil
 }
 
-func pollForDNS(ctx context.Context, log *slog.Logger, record TxtRecord, fn DNSConfirmationFunc, retries int) error {
+func pollForDNS(ctx context.Context, log *slog.Logger, record TxtRecord, fn DNSConfirmationFunc, interval time.Duration) error {
 	var (
 		err       error
 		dnsErr    *net.DNSError
 		ok, found bool
-		n         = RetryError(retries)
 	)
 
 	if log != nil {
@@ -184,7 +183,7 @@ func pollForDNS(ctx context.Context, log *slog.Logger, record TxtRecord, fn DNSC
 		fn = confirmTXT
 	}
 
-	for ; retries >= 0; retries-- {
+	for {
 		if found, err = fn(ctx, record); err != nil {
 			if log != nil {
 				log.WarnContext(ctx, "record not confirmed", "err", err)
@@ -207,16 +206,14 @@ func pollForDNS(ctx context.Context, log *slog.Logger, record TxtRecord, fn DNSC
 			return nil
 		}
 
-		if retries > 0 {
-			select {
-			case <-time.After(DefaultInterval):
-			case <-ctx.Done():
-				return ctx.Err()
-			}
+		select {
+		case <-time.After(interval):
+		case <-ctx.Done():
+			return ctx.Err()
 		}
+
 	}
 
-	return n
 }
 
 func (c *Client) provisionAuthz(ctx context.Context, key es256Key, az authz, domains map[string]Provider) (TxtRecord, CleanupFunc, error) {
@@ -321,8 +318,6 @@ type AttemptCfg struct {
 	DnsConfirmation DNSConfirmationFunc
 }
 
-const defaultRetries = 5
-
 func (c Client) attempt(ctx context.Context, o *order, id string, key es256Key, domains []string, providers map[string]Provider, cfg OrderCfg) (b []byte, certKey *ecdsa.PrivateKey, err error) {
 	var (
 		ch       chan error
@@ -359,7 +354,7 @@ func (c Client) attempt(ctx context.Context, o *order, id string, key es256Key, 
 	}
 
 	for _, txt = range records {
-		if err = pollForDNS(ctx, c.Log, txt, cfg.DnsConfirmation, defaultRetries); err != nil {
+		if err = pollForDNS(ctx, c.Log, txt, cfg.DnsConfirmation, c.PollInterval); err != nil {
 			err = errors.Join(fmt.Errorf("unable to confirm dns record: %v", txt), err)
 			return b, certKey, err
 		}
@@ -387,12 +382,12 @@ func (c Client) attempt(ctx context.Context, o *order, id string, key es256Key, 
 		return b, certKey, err
 	}
 
-	if err = c.pollForValidAuthz(ctx, o.Authorizations, id, key, defaultRetries); err != nil {
+	if err = c.pollForValidAuthz(ctx, o.Authorizations, id, key); err != nil {
 		err = errors.Join(err, errors.New("failed to confirm authz validity"))
 		return b, certKey, err
 	}
 
-	if err = c.pollForOrderReady(ctx, o.location, id, key, o, defaultRetries); err != nil {
+	if err = c.pollForOrderReady(ctx, o.location, id, key, o); err != nil {
 		err = errors.Join(err, errors.New("failed to confirm order readiness"))
 		return b, certKey, err
 	}
@@ -407,7 +402,7 @@ func (c Client) attempt(ctx context.Context, o *order, id string, key es256Key, 
 		return b, nil, err
 	}
 
-	if url, err = c.pollForCertURL(ctx, o.location, id, key, o, defaultRetries); err != nil {
+	if url, err = c.pollForCertURL(ctx, o.location, id, key, o); err != nil {
 		err = errors.Join(err, errors.New("failed to obtain certificate URL"))
 		return b, nil, err
 	}
@@ -452,12 +447,11 @@ func (c *Client) downloadCert(ctx context.Context, url, id string, key es256Key)
 
 }
 
-func (c *Client) pollForValidAuthz(ctx context.Context, urls []string, id string, key es256Key, retries int) error {
+func (c *Client) pollForValidAuthz(ctx context.Context, urls []string, id string, key es256Key) error {
 	var (
 		authz authz
 		err   error
 		i     int
-		n     = RetryError(retries)
 	)
 
 	for i < len(urls) {
@@ -471,15 +465,10 @@ func (c *Client) pollForValidAuthz(ctx context.Context, urls []string, id string
 			i++
 			continue
 		case authzStatusPending:
-			retries--
 		case authzStatusInvalid:
 			return ErrFailedAuthz
 		default:
 			return UnexpectedAuthzStatusError(authz.Status)
-		}
-
-		if retries--; retries <= 0 {
-			return n
 		}
 
 		if err = pause(ctx, authz.retryAfter); err != nil {
@@ -492,13 +481,10 @@ func (c *Client) pollForValidAuthz(ctx context.Context, urls []string, id string
 
 }
 
-func (c *Client) pollForCertURL(ctx context.Context, url, id string, key es256Key, out *order, retries int) (string, error) {
-	var (
-		err error
-		n   = RetryError(retries)
-	)
+func (c *Client) pollForCertURL(ctx context.Context, url, id string, key es256Key, out *order) (string, error) {
+	var err error
 
-	for err = c.fetchOrder(ctx, url, id, key, out); err == nil && retries > 0; err = c.fetchOrder(ctx, url, id, key, out) {
+	for err = c.fetchOrder(ctx, url, id, key, out); err == nil; err = c.fetchOrder(ctx, url, id, key, out) {
 		if out.CertificateURL != "" {
 			return out.CertificateURL, nil
 		}
@@ -506,16 +492,9 @@ func (c *Client) pollForCertURL(ctx context.Context, url, id string, key es256Ke
 		if err = pause(ctx, out.retryAfter); err != nil {
 			return "", err
 		}
-
-		retries--
 	}
 
-	if err != nil {
-		return "", err
-	}
-
-	return "", n
-
+	return "", err
 }
 
 func (c *Client) finalize(ctx context.Context, url, id string, domains []string, actKey es256Key, certKey *ecdsa.PrivateKey, out *order) error {
@@ -590,13 +569,10 @@ func (c *Client) submitFinalize(ctx context.Context, url, id string, key es256Ke
 	return nil
 }
 
-func (c *Client) pollForOrderReady(ctx context.Context, url, id string, key es256Key, out *order, retries int) error {
-	var (
-		err error
-		n   = RetryError(retries)
-	)
+func (c *Client) pollForOrderReady(ctx context.Context, url, id string, key es256Key, out *order) error {
+	var err error
 
-	for err = c.fetchOrder(ctx, url, id, key, out); err == nil && retries >= 0; err = c.fetchOrder(ctx, url, id, key, out) {
+	for err = c.fetchOrder(ctx, url, id, key, out); err == nil; err = c.fetchOrder(ctx, url, id, key, out) {
 		switch out.Status {
 		case orderStatusPending:
 			// keep polling
@@ -611,15 +587,9 @@ func (c *Client) pollForOrderReady(ctx context.Context, url, id string, key es25
 		if err = pause(ctx, out.retryAfter); err != nil {
 			return err
 		}
-
-		retries--
 	}
 
-	if err != nil {
-		return err
-	}
-
-	return n
+	return err
 }
 
 func (c *Client) fetchOrder(ctx context.Context, url, id string, key es256Key, out *order) error {
