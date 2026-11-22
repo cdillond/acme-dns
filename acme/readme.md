@@ -1,3 +1,6 @@
+[![Go Reference](https://pkg.go.dev/badge/go.ciaran.lol/acme-dns/acme.svg)](https://pkg.go.dev/go.ciaran.lol/acme-dns/acme)
+
+
 ## About
 Package acme is a minimal, opinionated, implementation of an [ACME client](https://datatracker.ietf.org/doc/html/rfc8555), intended to be light-weight, modular, and secure. It supports only the `dns-01` challenge type. Although it should work with all ACME servers, its primary target is Let's Encrypt.
 
