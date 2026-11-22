@@ -2,17 +2,10 @@ package acme
 
 import (
 	"context"
-	"fmt"
 	"net/http"
 	"strconv"
 	"time"
 )
-
-type RetryError int
-
-func (r RetryError) Error() string {
-	return fmt.Sprintf("retries exhausted: %d", r)
-}
 
 const DefaultInterval = 5 * time.Second
 

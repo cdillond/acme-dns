@@ -3,12 +3,14 @@ package acme
 import (
 	"context"
 	"crypto"
+	"crypto/ecdsa"
 	"crypto/x509"
 	"encoding/base64"
 	"encoding/json/jsontext"
 	"encoding/json/v2"
 	"errors"
 	"net/http"
+	"time"
 )
 
 // Certificate holds a private key and an X509 certificate chain.
@@ -18,6 +20,40 @@ import (
 type Certificate struct {
 	PrivateKey crypto.PrivateKey
 	Chain      []*x509.Certificate
+}
+
+// Leaf returns the leaf [*x509.Certificate] in c's [Certificate.Chain]. It returns nil if the chain is empty
+// or if the initial certificate in the chain is nil.
+func (c Certificate) Leaf() *x509.Certificate {
+	if len(c.Chain) < 1 {
+		return nil
+	}
+	return c.Chain[0]
+}
+
+// ShouldRenew returns true if the current time is after the leaf certificate's NotBefore and the duration until
+// certificate expiration is less than minTimeUntilExpiration. It also returns true if the leaf certificate is nil.
+func (c Certificate) ShouldRenew(minTimeUntilExpiration time.Duration) bool {
+	l := c.Leaf()
+	if l == nil {
+		return true
+	}
+	t := time.Now()
+	if t.Before(l.NotBefore) {
+		return false
+	}
+	return t.Add(minTimeUntilExpiration).After(l.NotAfter)
+}
+
+// PrivateKeyDER returns the SEC 1, ASN.1 DER form of the certificate's Key.
+func (c Certificate) PrivateKeyDER() ([]byte, error) {
+	key, ok := c.PrivateKey.(*ecdsa.PrivateKey)
+
+	if !ok {
+		return nil, errors.New("invalid private key")
+	}
+
+	return x509.MarshalECPrivateKey(key)
 }
 
 type RevocationReason uint32

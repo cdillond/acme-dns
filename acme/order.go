@@ -184,22 +184,24 @@ func pollForDNS(ctx context.Context, log *slog.Logger, record TxtRecord, fn DNSC
 	}
 
 	for {
-		if found, err = fn(ctx, record); err != nil {
+		found, err = fn(ctx, record)
+
+		switch {
+		case !found && err == nil:
+			if log != nil {
+				log.WarnContext(ctx, "record not confirmed", "reason", "potential stale dns cache")
+			}
+		case err != nil:
 			if log != nil {
 				log.WarnContext(ctx, "record not confirmed", "err", err)
 			}
 			if dnsErr, ok = errors.AsType[*net.DNSError](err); ok {
-				switch {
-				case dnsErr.IsNotFound, dnsErr.IsTemporary:
-				default:
-					return err
+				if dnsErr.IsNotFound || dnsErr.IsTemporary {
+					break
 				}
-			} else {
-				return err
 			}
-		}
-
-		if found {
+			return err
+		default:
 			if log != nil {
 				log.InfoContext(ctx, "record propagation confirmed")
 			}
@@ -272,7 +274,10 @@ func (c *Client) validateAuthz(ctx context.Context, id string, key es256Key, az 
 
 	for err == nil {
 		switch raw.Status {
-		case challengeStatusProcessing:
+		case challengeStatusPending, challengeStatusProcessing:
+			if c.Log != nil {
+				c.Log.Info("waiting for server challenge update", "challenge", raw)
+			}
 			// keep polling; no retry limit
 		case challengeStatusValid:
 			return nil
