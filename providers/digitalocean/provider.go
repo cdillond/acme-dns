@@ -5,7 +5,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log/slog"
 	"net/http"
 	"strings"
 
@@ -42,8 +41,8 @@ func NewProvider(token, baseDomain string) *Provider {
 // deletes the same record.
 func (p *Provider) Provision(ctx context.Context, record acme.TxtRecord) (acme.CleanupFunc, error) {
 	var (
-		log, _ = ctx.Value(acme.LogKey{}).(*slog.Logger)
-		req    = godo.DomainRecordEditRequest{
+		log = acme.ExtractLogger(ctx)
+		req = godo.DomainRecordEditRequest{
 			Type: "TXT",
 			Data: record.Value,
 			TTL:  int(record.TTL),
@@ -87,7 +86,7 @@ func (p *Provider) Provision(ctx context.Context, record acme.TxtRecord) (acme.C
 
 func (p *Provider) deprovision(ctx context.Context, recordID int) error {
 	var (
-		log, _ = ctx.Value(acme.LogKey{}).(*slog.Logger)
+		log    = acme.ExtractLogger(ctx)
 		apiErr *godo.ErrorResponse
 		err    error
 	)

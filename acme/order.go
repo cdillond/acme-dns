@@ -254,10 +254,9 @@ func (c *Client) provisionAuthz(ctx context.Context, key es256Key, az authz, dom
 
 func (c *Client) validateAuthz(ctx context.Context, id string, key es256Key, az authz) error {
 	var (
-		dns            *challenge
-		raw            rawChallenge
-		err            error
-		pendingRetries = 3
+		dns *challenge
+		raw rawChallenge
+		err error
 	)
 
 	defer func() {
@@ -276,14 +275,6 @@ func (c *Client) validateAuthz(ctx context.Context, id string, key es256Key, az 
 
 	for err == nil {
 		switch raw.Status {
-		case challengeStatusPending:
-			// this shouldn't happen, but it can if the server lags
-			if pendingRetries == 0 {
-				err = UnexpectedChallengeStatusError(raw.Status)
-				return err
-			}
-
-			pendingRetries--
 		case challengeStatusProcessing:
 			// keep polling; no retry limit
 		case challengeStatusValid:
@@ -594,7 +585,7 @@ func (c *Client) submitFinalize(ctx context.Context, url, id string, key es256Ke
 		return UnexpectedOrderStatusError(out.Status)
 	}
 
-	out.retryAfter.parse(res)
+	out.retryAfter.parse(res, c.PollInterval)
 
 	return nil
 }
@@ -663,7 +654,7 @@ func (c *Client) fetchOrder(ctx context.Context, url, id string, key es256Key, o
 		return err
 	}
 
-	out.retryAfter.parse(res)
+	out.retryAfter.parse(res, c.PollInterval)
 
 	return nil
 

@@ -18,10 +18,10 @@ const DefaultInterval = 5 * time.Second
 
 type retryAfter time.Time
 
-func (r *retryAfter) parse(res *http.Response) {
+func (r *retryAfter) parse(res *http.Response, interval time.Duration) {
 	t := parseRetryAfterHeader(res.Header.Get("Retry-After"))
 	if t.IsZero() {
-		*r = retryAfter((time.Now().Add(DefaultInterval)))
+		*r = retryAfter((time.Now().Add(interval)))
 	} else {
 		*r = retryAfter(t)
 	}

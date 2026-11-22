@@ -12,6 +12,7 @@ import (
 	"maps"
 	"net/http"
 	"slices"
+	"time"
 )
 
 /*
@@ -37,7 +38,11 @@ var postAsGetPayload = []byte{}
 
 type Client struct {
 	Dir ACMEDirectory
-	Log *slog.Logger
+	// The minimum time to wait between requests to the ACME server or DNS resolver. If PollInterval is not positive,
+	// a DefaultInterval of 5 seconds is used. The configured PollInterval is ignored when the server's
+	// response to a request includes a Retry-After header.
+	PollInterval time.Duration
+	Log          *slog.Logger
 }
 
 func (c Client) requestNonce(ctx context.Context) (string, error) {
@@ -490,7 +495,7 @@ func (c Client) fetchUnmarshalAuthz(ctx context.Context, url, id string, key es2
 		err = &bad
 	} else {
 		err = json.UnmarshalDecode(dec, out)
-		out.retryAfter.parse(res)
+		out.retryAfter.parse(res, c.PollInterval)
 	}
 
 	return err
@@ -524,7 +529,7 @@ func (c Client) fetchChallenge(ctx context.Context, url, id string, key es256Key
 	} else {
 		err = json.UnmarshalDecode(dec, &out)
 		if err == nil {
-			out.retryAfter.parse(res)
+			out.retryAfter.parse(res, c.PollInterval)
 		}
 	}
 
@@ -610,6 +615,10 @@ func (c Client) OrderCertificate(ctx context.Context, account Account, domains m
 	}
 	if len(domains) == 0 {
 		return Certificate{}, errors.New("order must include at least 1 domain")
+	}
+
+	if c.PollInterval <= 0 {
+		c.PollInterval = DefaultInterval
 	}
 
 	s := slices.Collect(maps.Keys(domains))

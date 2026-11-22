@@ -1,5 +1,9 @@
 Package acme is a minimal, opinionated, implementation of an [ACME client](https://datatracker.ietf.org/doc/html/rfc8555), intended to be light-weight, modular, and secure. It supports only the `dns-01` challenge type.
 
+## Logging
+If the client's `Logger` field is non-nil, it may write messages to the provided logger. To disable logging, simply configure the client to use a nil logger. When calling `Provider.Provision` and the `CleanupFunc` returned by such a call, the client's logger
+is passed to the function via the `ctx` argument. Implementations of `Provider` can extract the logger from the context using the `ExtractLogger` function.
+
 
 ## Example
 ```go

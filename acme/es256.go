@@ -11,7 +11,8 @@ import (
 	"math/big"
 )
 
-// AccountKey is an ES256 key used to sign ACME requests.
+// AccountKey is cryptographic key used to sign ACME requests. Currently, only
+// [ecdsa.PrivateKey] keys with the NIST P-256 curve are supported.
 type AccountKey struct {
 	es256Key
 }
@@ -39,6 +40,8 @@ func NewAccountKeyFromECDSAP256(k *ecdsa.PrivateKey) (AccountKey, error) {
 	return AccountKey{es256Key: e}, nil
 }
 
+// PrivateKey returns the [Account]'s underlying private key as a [crypto.PrivateKey]. The concrete
+// type of the key is [*ecdsa.PrivateKey].
 func (a AccountKey) PrivateKey() crypto.PrivateKey {
 	return a.es256Key.pk
 }
