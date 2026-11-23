@@ -45,7 +45,7 @@ func (c Certificate) ShouldRenew(minTimeUntilExpiration time.Duration) bool {
 	return t.Add(minTimeUntilExpiration).After(l.NotAfter)
 }
 
-// PrivateKeyDER returns the SEC 1, ASN.1 DER form of the certificate's Key.
+// PrivateKeyDER returns the PKCS #8, ASN.1 DER form of the certificate's Key.
 func (c Certificate) PrivateKeyDER() ([]byte, error) {
 	key, ok := c.PrivateKey.(*ecdsa.PrivateKey)
 
@@ -53,7 +53,7 @@ func (c Certificate) PrivateKeyDER() ([]byte, error) {
 		return nil, errors.New("invalid private key")
 	}
 
-	return x509.MarshalECPrivateKey(key)
+	return x509.MarshalPKCS8PrivateKey(key)
 }
 
 type RevocationReason uint32
