@@ -33,20 +33,6 @@ func (c Certificate) Leaf() *x509.Certificate {
 	return c.Chain[0]
 }
 
-// ShouldRenew returns true if the current time is after the leaf certificate's NotBefore and the duration until
-// certificate expiration is less than minTimeUntilExpiration. It also returns true if the leaf certificate is nil.
-func (c Certificate) ShouldRenew(minTimeUntilExpiration time.Duration) bool {
-	l := c.Leaf()
-	if l == nil {
-		return true
-	}
-	t := time.Now()
-	if t.Before(l.NotBefore) {
-		return false
-	}
-	return t.Add(minTimeUntilExpiration).After(l.NotAfter)
-}
-
 // PrivateKeyDER returns the PKCS #8, ASN.1 DER form of the certificate's Key.
 func (c Certificate) PrivateKeyDER() ([]byte, error) {
 	key, ok := c.PrivateKey.(*ecdsa.PrivateKey)
@@ -138,6 +124,23 @@ func DecodePEM(b []byte) []byte {
 	}
 
 	return out
+}
+
+// ShouldRenew returns true if the current time is after the leaf certificate's NotBefore and the duration until
+// certificate expiration is less than minTimeUntilExpiration. It also returns true if chain is empty or the leaf certificate is nil.
+func ShouldRenew(chain []*x509.Certificate, minTimeUntilExpiration time.Duration) bool {
+	if len(chain) < 1 {
+		return true
+	}
+	l := chain[0]
+	if l == nil {
+		return true
+	}
+	t := time.Now()
+	if t.Before(l.NotBefore) {
+		return false
+	}
+	return t.Add(minTimeUntilExpiration).After(l.NotAfter)
 }
 
 type RevocationReason uint32

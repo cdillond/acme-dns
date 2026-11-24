@@ -25,7 +25,7 @@ ACME does not provide a direct mechanism for certificate renewal. Instead, renew
 ```
 If the client wishes to obtain a renewed certificate, the client initiates a new order process to request one.
 ```
-Users with an existing `Certificate` are advised to check if it meets the criteria for renewal by calling `Certificate.ShouldRenew` before placing a new order.
+Users with an existing `Certificate` are advised to check if it meets the criteria for renewal by calling `ShouldRenew` before placing a new order.
 
 ## Example
 ```go
