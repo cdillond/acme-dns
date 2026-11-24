@@ -58,6 +58,26 @@ func (c Certificate) PrivateKeyDER() ([]byte, error) {
 	return x509.MarshalPKCS8PrivateKey(key)
 }
 
+// PrivateKeyPEM returns the PEM-encoded [Certificate.PrivateKey].
+func (c Certificate) PrivateKeyPEM() ([]byte, error) {
+	der, err := c.PrivateKeyDER()
+	if err != nil {
+		return nil, err
+	}
+	buf := new(bytes.Buffer)
+
+	block := pem.Block{
+		Type:  "PRIVATE KEY",
+		Bytes: der,
+	}
+
+	if err = pem.Encode(buf, &block); err != nil {
+		return nil, err
+	}
+
+	return buf.Bytes(), nil
+}
+
 // ChainPEM is a convenience function that returns the [Certificate.Chain] as a PEM-encoded byte slice. Like [pem.EncodeToMemory],
 // it returns nil if any of the certificates in the chain are malformed or nil.
 func (c Certificate) ChainPEM() []byte {
