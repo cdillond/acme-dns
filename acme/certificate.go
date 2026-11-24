@@ -1,6 +1,7 @@
 package acme
 
 import (
+	"bytes"
 	"context"
 	"crypto"
 	"crypto/ecdsa"
@@ -8,6 +9,7 @@ import (
 	"encoding/base64"
 	"encoding/json/jsontext"
 	"encoding/json/v2"
+	"encoding/pem"
 	"errors"
 	"net/http"
 	"time"
@@ -54,6 +56,68 @@ func (c Certificate) PrivateKeyDER() ([]byte, error) {
 	}
 
 	return x509.MarshalPKCS8PrivateKey(key)
+}
+
+// ChainPEM is a convenience function that returns the [Certificate.Chain] as a PEM-encoded byte slice. Like [pem.EncodeToMemory],
+// it returns nil if any of the certificates in the chain are malformed or nil.
+func (c Certificate) ChainPEM() []byte {
+	var (
+		err   error
+		cert  *x509.Certificate
+		buf   = new(bytes.Buffer)
+		block = pem.Block{Type: "CERTIFICATE"}
+	)
+
+	for _, cert = range c.Chain {
+		if cert == nil {
+			return nil
+		}
+
+		block.Bytes = cert.Raw
+
+		if err = pem.Encode(buf, &block); err != nil {
+			return nil
+		}
+	}
+
+	return buf.Bytes()
+}
+
+// ChainDER is a convenience function that returns the [Certificate.Chain] as a DER-encoded byte slice. If any [*x509.Certificate]
+// in the [Certificate.Chain] is nil, it instead returns nil.
+func (c Certificate) ChainDER() []byte {
+	var (
+		b    []byte
+		cert *x509.Certificate
+	)
+
+	for _, cert = range c.Chain {
+		if cert == nil {
+			return nil
+		}
+		b = append(b, cert.Raw...)
+	}
+
+	return b
+}
+
+// DecodePEM decodes all PEM blocks in b, which must be a PEM-encoded byte slice, and returns the concatenated data from
+// the decoded blocks. The output of this function may be passed to, for example, [x509.ParseCertificates].
+func DecodePEM(b []byte) []byte {
+	var (
+		out   []byte = make([]byte, 0, len(b))
+		block *pem.Block
+	)
+
+	for len(b) > 0 {
+		block, b = pem.Decode(b)
+		if block == nil {
+			break
+		}
+		out = append(out, block.Bytes...)
+	}
+
+	return out
 }
 
 type RevocationReason uint32
