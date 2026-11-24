@@ -561,8 +561,7 @@ func (c *Client) submitFinalize(ctx context.Context, url, id string, key es256Ke
 	}
 
 	switch out.Status {
-	case orderStatusProcessing:
-		// strictly speaking, OrderStatusProcessing is the only valid response
+	case orderStatusProcessing, orderStatusValid:
 	case orderStatusInvalid:
 		return ErrFailedOrder
 	default:
