@@ -340,6 +340,10 @@ func (c Client) attempt(ctx context.Context, o *order, id string, key es256Key, 
 		return b, certKey, err
 	}
 
+	if len(auths) == 0 {
+		return b, certKey, errors.New("no pending authorizations")
+	}
+
 	defer func() {
 		err = errors.Join(err, cleanup(withLogger(ctx, c.Log), cleanups))
 	}()
