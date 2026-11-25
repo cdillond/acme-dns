@@ -50,6 +50,20 @@ var authzStrings = [authzStatusUnknown]string{
 	"revoked",
 }
 
+func partitionAuthz(s []authz) (pending, valid, bad []authz) {
+	for _, a := range s {
+		switch a.Status {
+		case authzStatusPending:
+			pending = append(pending, a)
+		case authzStatusValid:
+			valid = append(valid, a)
+		default:
+			bad = append(bad, a)
+		}
+	}
+	return pending, valid, bad
+}
+
 func newAuthzStatus(s string) authzStatus {
 	n := slices.Index(authzStrings[:], s)
 

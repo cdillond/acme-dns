@@ -571,16 +571,13 @@ func (c Client) fetchAuthz(ctx context.Context, urls []string, id string, key es
 		out = make([]authz, len(urls))
 	)
 
-	for _, url = range urls {
+	for i, url = range urls {
 		if err = c.fetchUnmarshalAuthz(ctx, url, id, key, &out[i]); err != nil {
 			return nil, err
 		}
-		if out[i].Status == authzStatusPending {
-			i++
-		}
 	}
 
-	return out[:i], nil
+	return out, nil
 }
 
 // NewClient fetches the ACME directory at url and returns a Client using log. If log is nil

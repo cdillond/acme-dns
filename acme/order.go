@@ -321,15 +321,15 @@ func cleanup(ctx context.Context, fns []CleanupFunc) error {
 
 func (c Client) attempt(ctx context.Context, o *order, id string, key es256Key, domains []string, providers map[string]Provider, cfg OrderCfg) (b []byte, certKey *ecdsa.PrivateKey, err error) {
 	var (
-		ch       chan error
-		az       authz
-		auths    []authz
-		url      string
-		txt      TxtRecord
-		fn       CleanupFunc
-		records  []TxtRecord
-		cleanups []CleanupFunc
-		i        int
+		ch                            chan error
+		az                            authz
+		auths, pendingAuths, badAuths []authz
+		url                           string
+		txt                           TxtRecord
+		fn                            CleanupFunc
+		records                       []TxtRecord
+		cleanups                      []CleanupFunc
+		i                             int
 	)
 
 	ctx, cancel := context.WithCancel(ctx)
@@ -341,14 +341,24 @@ func (c Client) attempt(ctx context.Context, o *order, id string, key es256Key, 
 	}
 
 	if len(auths) == 0 {
-		return b, certKey, errors.New("no pending authorizations")
+		return b, certKey, errors.New("no authorizations returned by the server")
+	}
+
+	pendingAuths, _, badAuths = partitionAuthz(auths)
+
+	if len(badAuths) > 0 {
+		err = ErrFailedAuthz
+		for _, az = range badAuths {
+			err = errors.Join(err, fmt.Errorf("authorization %q has status %s", az.Identifier.Value, az.Status))
+		}
+		return b, certKey, err
 	}
 
 	defer func() {
 		err = errors.Join(err, cleanup(withLogger(ctx, c.Log), cleanups))
 	}()
 
-	for _, az = range auths {
+	for _, az = range pendingAuths {
 		if txt, fn, err = c.provisionAuthz(ctx, key, az, providers); err != nil {
 			err = errors.Join(err, fmt.Errorf("unable to provision authz: %v", az))
 			return b, certKey, err
@@ -365,15 +375,15 @@ func (c Client) attempt(ctx context.Context, o *order, id string, key es256Key, 
 		}
 	}
 
-	ch = make(chan error, len(auths))
+	ch = make(chan error, len(pendingAuths))
 
-	for _, az = range auths {
+	for _, az = range pendingAuths {
 		go func(ctx context.Context, key es256Key, az authz) {
 			ch <- c.validateAuthz(ctx, id, key, az)
 		}(ctx, key, az)
 	}
 
-	for i = range auths {
+	for i = range pendingAuths {
 		if err = errors.Join(err, <-ch); err != nil {
 			// cancel pending challenges if there are any
 			// and they have not already been cancelled
@@ -471,7 +481,7 @@ func (c *Client) pollForValidAuthz(ctx context.Context, urls []string, id string
 			continue
 		case authzStatusPending:
 		case authzStatusInvalid, authzStatusDeactivated, authzStatusExpired, authzStatusRevoked:
-			return ErrFailedAuthz
+			return errors.Join(ErrFailedAuthz, fmt.Errorf("authorization %q has status %s", authz.Identifier.Value, authz.Status))
 		default:
 			return UnexpectedAuthzStatusError(authz.Status)
 		}
