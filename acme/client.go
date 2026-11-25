@@ -53,7 +53,7 @@ func (c Client) requestNonce(ctx context.Context) (string, error) {
 		res *http.Response
 	)
 
-	if req, err = http.NewRequest(http.MethodHead, c.Dir.NewNonce, nil); err != nil {
+	if req, err = http.NewRequestWithContext(ctx, http.MethodHead, c.Dir.NewNonce, nil); err != nil {
 		return s, err
 	}
 
@@ -89,7 +89,7 @@ func (c Client) signedPostID(ctx context.Context, url, id string, key es256Key, 
 		return nil, err
 	}
 
-	if req, err = http.NewRequest(http.MethodPost, url, bytes.NewReader(jws)); err != nil {
+	if req, err = http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(jws)); err != nil {
 		return res, err
 	}
 
@@ -121,7 +121,7 @@ func (c Client) signedPostJWK(ctx context.Context, url string, key es256Key, pay
 		return nil, err
 	}
 
-	if req, err = http.NewRequest(http.MethodPost, url, bytes.NewReader(jws)); err != nil {
+	if req, err = http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(jws)); err != nil {
 		return res, err
 	}
 
