@@ -79,7 +79,7 @@ func (c *challengeStatus) UnmarshalJSONFrom(dec *jsontext.Decoder) error {
 	return nil
 }
 
-type UnexpectedChallengeStatusError orderStatus
+type UnexpectedChallengeStatusError challengeStatus
 
 func (u UnexpectedChallengeStatusError) Error() string {
 	return "unexpected challenge status: " + challengeStatus(u).String()
