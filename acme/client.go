@@ -45,6 +45,27 @@ type Client struct {
 	Log          *slog.Logger
 }
 
+// isValidNonce checks that the nonce is base64url-encoded
+func isValidNonce(nonce string) bool {
+	var (
+		i int
+		c byte
+	)
+	for i = range nonce {
+		c = nonce[i]
+		switch {
+		case c == '-':
+		case c >= '0' && c <= '9':
+		case c >= 'A' && c <= 'Z':
+		case c == '_':
+		case c >= 'a' && c <= 'z':
+		default:
+			return false
+		}
+	}
+	return true
+}
+
 func (c Client) requestNonce(ctx context.Context) (string, error) {
 	var (
 		s   string
@@ -75,6 +96,35 @@ func (c Client) requestNonce(ctx context.Context) (string, error) {
 	return s, err
 }
 
+func checkResponseProblem(res *http.Response) (string, error) {
+	var (
+		err error
+		bad Problem
+		dec *jsontext.Decoder
+	)
+	if res.StatusCode < 400 {
+		return "", nil
+	}
+	dec = jsontext.NewDecoder(res.Body)
+
+	defer func() {
+		err = errors.Join(err, res.Body.Close())
+	}()
+
+	if err = json.UnmarshalDecode(dec, &bad); err != nil {
+		return "", err
+	}
+
+	// per the RFC, nonce errors MUST be retried
+	if res.StatusCode == 400 && bad.Type == ProblemTypeBadNonce {
+		return res.Header.Get("Replay-Nonce"), err
+	}
+
+	err = &bad
+
+	return "", err
+}
+
 func (c Client) signedPostID(ctx context.Context, url, id string, key es256Key, payload []byte) (*http.Response, error) {
 	var (
 		req   *http.Request
@@ -87,6 +137,11 @@ func (c Client) signedPostID(ctx context.Context, url, id string, key es256Key, 
 
 	if nonce, err = c.requestNonce(ctx); err != nil {
 		return nil, err
+	}
+
+retry_nonce:
+	if !isValidNonce(nonce) {
+		return nil, errors.New("invalid nonce: " + nonce)
 	}
 
 	h = key.newJWSHeaderWithKID(url, id, nonce)
@@ -102,7 +157,20 @@ func (c Client) signedPostID(ctx context.Context, url, id string, key es256Key, 
 	req.Header.Set("Content-Type", joseMIME)
 	req.Header.Set("User-Agent", UserAgent)
 
-	return http.DefaultClient.Do(req)
+	res, err = http.DefaultClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+
+	nonce, err = checkResponseProblem(res)
+	if err == nil {
+		return nil, err
+	}
+	if nonce != "" {
+		goto retry_nonce
+	}
+
+	return res, err
 }
 
 func (c Client) signedPostJWK(ctx context.Context, url string, key es256Key, payload []byte) (*http.Response, error) {
@@ -117,6 +185,11 @@ func (c Client) signedPostJWK(ctx context.Context, url string, key es256Key, pay
 
 	if nonce, err = c.requestNonce(ctx); err != nil {
 		return nil, err
+	}
+
+retry_nonce:
+	if !isValidNonce(nonce) {
+		return nil, errors.New("invalid nonce: " + nonce)
 	}
 
 	if h, err = key.newJWSHeaderWithJWK(url, nonce); err != nil {
@@ -134,7 +207,20 @@ func (c Client) signedPostJWK(ctx context.Context, url string, key es256Key, pay
 	req.Header.Set("Content-Type", joseMIME)
 	req.Header.Set("User-Agent", UserAgent)
 
-	return http.DefaultClient.Do(req)
+	res, err = http.DefaultClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+
+	nonce, err = checkResponseProblem(res)
+	if err == nil {
+		return nil, err
+	}
+	if nonce != "" {
+		goto retry_nonce
+	}
+
+	return res, err
 }
 
 // RequestAccount requests a new or existing [Account] from the ACME server. If the provided [AccountKey]
@@ -152,7 +238,6 @@ func (c Client) RequestAccount(ctx context.Context, key AccountKey, cfg AccountC
 		raw []byte
 		res *http.Response
 		dec *jsontext.Decoder
-		bad Problem
 		loc string
 	)
 
@@ -172,19 +257,15 @@ func (c Client) RequestAccount(ctx context.Context, key AccountKey, cfg AccountC
 		err = errors.Join(err, res.Body.Close())
 	}()
 
-	dec = jsontext.NewDecoder(res.Body)
-
 	if res.StatusCode != http.StatusOK && res.StatusCode != http.StatusCreated {
-		if err = json.UnmarshalDecode(dec, &bad); err != nil {
-			return acc, data, errors.Join(err, errors.New("server responded with an unexpected status: "+res.Status))
-		}
-		return acc, data, &bad
+		err = errors.New("server responded with an unexpected status: " + res.Status)
+		return acc, data, err
 	}
 
 	if loc = res.Header.Get("Location"); loc == "" {
 		return acc, data, errors.New("no account ID provided by the server")
 	}
-
+	dec = jsontext.NewDecoder(res.Body)
 	if err = json.UnmarshalDecode(dec, &data); err != nil {
 		return acc, data, err
 	}
@@ -206,7 +287,6 @@ func (c Client) RequestAccountWithEAB(ctx context.Context, key AccountKey, eab E
 		res      *http.Response
 		dec      *jsontext.Decoder
 		loc      string
-		bad      Problem
 	)
 
 	if eab.KID == "" {
@@ -253,18 +333,16 @@ func (c Client) RequestAccountWithEAB(ctx context.Context, key AccountKey, eab E
 		err = errors.Join(err, res.Body.Close())
 	}()
 
-	dec = jsontext.NewDecoder(res.Body)
-
 	if res.StatusCode != http.StatusOK && res.StatusCode != http.StatusCreated {
-		if err = json.UnmarshalDecode(dec, &bad); err != nil {
-			return acc, data, errors.Join(err, errors.New("server responded with an unexpected status: "+res.Status))
-		}
-		return acc, data, &bad
+		err = errors.New("server responded with an unexpected status: " + res.Status)
+		return acc, data, err
 	}
 
 	if loc = res.Header.Get("Location"); loc == "" {
 		return acc, data, errors.New("no account ID provided by the server")
 	}
+
+	dec = jsontext.NewDecoder(res.Body)
 
 	if err = json.UnmarshalDecode(dec, &data); err != nil {
 		return acc, data, err
@@ -282,7 +360,6 @@ func (c Client) DeactivateAccount(ctx context.Context, account Account) (Account
 	var (
 		err  error
 		b    []byte
-		bad  Problem
 		dec  *jsontext.Decoder
 		res  *http.Response
 		data AccountData
@@ -304,16 +381,12 @@ func (c Client) DeactivateAccount(ctx context.Context, account Account) (Account
 		err = errors.Join(err, res.Body.Close())
 	}()
 
-	dec = jsontext.NewDecoder(res.Body)
-
 	if res.StatusCode != http.StatusOK {
-		if err = json.UnmarshalDecode(dec, &bad); err != nil {
-			return data, err
-		}
-		err = &bad
+		err = errors.New("server responded with an unexpected status: " + res.Status)
 		return data, err
 	}
 
+	dec = jsontext.NewDecoder(res.Body)
 	err = json.UnmarshalDecode(dec, &data)
 
 	return data, err
@@ -327,7 +400,6 @@ func (c Client) UpdateAccountContact(ctx context.Context, account Account, conta
 	var (
 		err  error
 		b    []byte
-		bad  Problem
 		dec  *jsontext.Decoder
 		res  *http.Response
 		data AccountData
@@ -349,16 +421,12 @@ func (c Client) UpdateAccountContact(ctx context.Context, account Account, conta
 		err = errors.Join(err, res.Body.Close())
 	}()
 
-	dec = jsontext.NewDecoder(res.Body)
-
 	if res.StatusCode != http.StatusOK {
-		if err = json.UnmarshalDecode(dec, &bad); err != nil {
-			return data, err
-		}
-		err = &bad
+		err = errors.New("server responded with an unexpected status: " + res.Status)
 		return data, err
 	}
 
+	dec = jsontext.NewDecoder(res.Body)
 	err = json.UnmarshalDecode(dec, &data)
 
 	return data, err
@@ -376,8 +444,6 @@ func (c Client) UpdateAccountKey(ctx context.Context, account Account, newKey Ac
 		k            keyRollover
 		innerPayload []byte
 		payload      []byte
-		bad          Problem
-		dec          *jsontext.Decoder
 		res          *http.Response
 		j            jwk
 		h            jwsHeaderNonceless
@@ -417,11 +483,7 @@ func (c Client) UpdateAccountKey(ctx context.Context, account Account, newKey Ac
 	}()
 
 	if res.StatusCode != http.StatusOK {
-		dec = jsontext.NewDecoder(res.Body)
-		if err = json.UnmarshalDecode(dec, &bad); err != nil {
-			return out, err
-		}
-		err = &bad
+		err = errors.New("server responded with an unexpected status: " + res.Status)
 		return out, err
 	}
 
@@ -434,7 +496,6 @@ func (c Client) UpdateAccountKey(ctx context.Context, account Account, newKey Ac
 func (c Client) newOrder(ctx context.Context, account Account, domainSlice []string, cfg OrderCfg) (order, error) {
 	var (
 		out order
-		bad Problem
 		err error
 		raw []byte
 		res *http.Response
@@ -458,13 +519,8 @@ func (c Client) newOrder(ctx context.Context, account Account, domainSlice []str
 		err = errors.Join(err, res.Body.Close())
 	}()
 
-	dec = jsontext.NewDecoder(res.Body)
-
 	if res.StatusCode != http.StatusCreated {
-		if err = json.UnmarshalDecode(dec, &bad); err != nil {
-			return out, err
-		}
-		err = &bad
+		err = errors.New("server responded with an unexpected status: " + res.Status)
 		return out, err
 	}
 
@@ -473,6 +529,7 @@ func (c Client) newOrder(ctx context.Context, account Account, domainSlice []str
 		return out, err
 	}
 
+	dec = jsontext.NewDecoder(res.Body)
 	if err = json.UnmarshalDecode(dec, &out); err != nil {
 		return out, err
 	}
@@ -487,7 +544,6 @@ func (c Client) fetchUnmarshalAuthz(ctx context.Context, url, id string, key es2
 		err error
 		res *http.Response
 		dec *jsontext.Decoder
-		bad Problem
 	)
 
 	res, err = c.signedPostID(ctx, url, id, key, postAsGetPayload)
@@ -499,19 +555,16 @@ func (c Client) fetchUnmarshalAuthz(ctx context.Context, url, id string, key es2
 		err = errors.Join(err, res.Body.Close())
 	}()
 
-	dec = jsontext.NewDecoder(res.Body)
-
 	if res.StatusCode != http.StatusOK {
-		err = json.UnmarshalDecode(dec, &bad)
-		if err != nil {
-			return err
-		}
-		err = &bad
-	} else {
-		err = json.UnmarshalDecode(dec, out)
-		out.retryAfter.parse(res, c.PollInterval)
+		err = errors.New("server responded with an unexpected status: " + res.Status)
 	}
 
+	dec = jsontext.NewDecoder(res.Body)
+	if err = json.UnmarshalDecode(dec, out); err != nil {
+		return err
+	}
+
+	out.retryAfter.parse(res, c.PollInterval)
 	return err
 }
 
@@ -520,7 +573,6 @@ func (c Client) fetchChallenge(ctx context.Context, url, id string, key es256Key
 		out rawChallenge
 		res *http.Response
 		dec *jsontext.Decoder
-		bad Problem
 		err error
 	)
 
@@ -532,20 +584,17 @@ func (c Client) fetchChallenge(ctx context.Context, url, id string, key es256Key
 		err = errors.Join(err, res.Body.Close())
 	}()
 
-	dec = jsontext.NewDecoder(res.Body)
-
 	if res.StatusCode != http.StatusOK {
-		err = json.UnmarshalDecode(dec, &bad)
-		if err != nil {
-			return out, err
-		}
-		err = &bad
-	} else {
-		err = json.UnmarshalDecode(dec, &out)
-		if err == nil {
-			out.retryAfter.parse(res, c.PollInterval)
-		}
+		err = errors.New("server responded with an unexpected status: " + res.Status)
+		return out, err
 	}
+
+	dec = jsontext.NewDecoder(res.Body)
+	if err = json.UnmarshalDecode(dec, &out); err != nil {
+		return out, err
+	}
+
+	out.retryAfter.parse(res, c.PollInterval)
 
 	return out, err
 }

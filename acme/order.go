@@ -435,8 +435,6 @@ func (c *Client) downloadCert(ctx context.Context, url, id string, key es256Key)
 		b   []byte
 		err error
 		res *http.Response
-		bad Problem
-		dec *jsontext.Decoder
 	)
 
 	if res, err = c.signedPostID(ctx, url, id, key, postAsGetPayload); err != nil {
@@ -448,11 +446,7 @@ func (c *Client) downloadCert(ctx context.Context, url, id string, key es256Key)
 	}()
 
 	if res.StatusCode != http.StatusOK {
-		dec = jsontext.NewDecoder(res.Body)
-		if err = json.UnmarshalDecode(dec, &bad); err != nil {
-			return b, err
-		}
-		err = &bad
+		err = errors.New("server responded with an unexpected status: " + res.Status)
 		return b, err
 	}
 
@@ -552,7 +546,6 @@ func (c *Client) submitFinalize(ctx context.Context, url, id string, key es256Ke
 		res *http.Response
 		err error
 		dec *jsontext.Decoder
-		bad Problem
 	)
 
 	if res, err = c.signedPostID(ctx, url, id, key, b); err != nil {
@@ -563,19 +556,13 @@ func (c *Client) submitFinalize(ctx context.Context, url, id string, key es256Ke
 		err = errors.Join(err, res.Body.Close())
 	}()
 
-	dec = jsontext.NewDecoder(res.Body)
-
 	if res.StatusCode != http.StatusOK {
-		err = json.UnmarshalDecode(dec, &bad)
-		if err != nil {
-			return err
-		}
-		err = &bad
+		err = errors.New("server responded with an unexpected status: " + res.Status)
 		return err
 	}
 
-	err = json.UnmarshalDecode(dec, out)
-	if err != nil {
+	dec = jsontext.NewDecoder(res.Body)
+	if err = json.UnmarshalDecode(dec, out); err != nil {
 		return err
 	}
 
@@ -620,7 +607,6 @@ func (c *Client) fetchOrder(ctx context.Context, url, id string, key es256Key, o
 		res *http.Response
 		err error
 		dec *jsontext.Decoder
-		bad Problem
 	)
 
 	if res, err = c.signedPostID(ctx, url, id, key, postAsGetPayload); err != nil {
@@ -631,19 +617,13 @@ func (c *Client) fetchOrder(ctx context.Context, url, id string, key es256Key, o
 		err = errors.Join(err, res.Body.Close())
 	}()
 
-	dec = jsontext.NewDecoder(res.Body)
-
 	if res.StatusCode != http.StatusOK {
-		err = json.UnmarshalDecode(dec, &bad)
-		if err != nil {
-			return err
-		}
-		err = &bad
+		err = errors.New("server responded with an unexpected status: " + res.Status)
 		return err
 	}
 
-	err = json.UnmarshalDecode(dec, out)
-	if err != nil {
+	dec = jsontext.NewDecoder(res.Body)
+	if err = json.UnmarshalDecode(dec, out); err != nil {
 		return err
 	}
 
