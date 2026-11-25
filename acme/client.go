@@ -57,6 +57,8 @@ func (c Client) requestNonce(ctx context.Context) (string, error) {
 		return s, err
 	}
 
+	req.Header.Set("User-Agent", UserAgent)
+
 	if res, err = http.DefaultClient.Do(req); err != nil {
 		return s, err
 	}
@@ -586,11 +588,13 @@ func NewClient(ctx context.Context, url string, log *slog.Logger) (Client, error
 		dec *jsontext.Decoder
 	)
 
-	if req, err = http.NewRequest(http.MethodGet, url, nil); err != nil {
+	if req, err = http.NewRequestWithContext(ctx, http.MethodGet, url, nil); err != nil {
 		return c, err
 	}
 
-	if res, err = http.DefaultClient.Do(req.WithContext(ctx)); err != nil {
+	req.Header.Set("User-Agent", UserAgent)
+
+	if res, err = http.DefaultClient.Do(req); err != nil {
 		return c, err
 	}
 
