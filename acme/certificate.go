@@ -195,7 +195,7 @@ func (c Client) RevokeCert(ctx context.Context, account Account, cert *x509.Cert
 		err = errors.Join(err, res.Body.Close())
 	}()
 
-	if res.StatusCode > 299 {
+	if res.StatusCode != http.StatusOK {
 		dec = jsontext.NewDecoder(res.Body)
 		if err = json.UnmarshalDecode(dec, &bad); err != nil {
 			return err
