@@ -126,7 +126,7 @@ func checkResponseProblem(res *http.Response) (string, error) {
 		if err = validateNonce(nonce); err != nil {
 			err = errors.Join(&bad, err)
 		}
-		return "", err
+		return nonce, err
 	}
 
 	err = &bad
@@ -151,38 +151,34 @@ func (c Client) signedPostID(ctx context.Context, url, id string, key es256Key, 
 		return nil, err
 	}
 
-retry_nonce:
-	h = key.newJWSHeaderWithKID(url, id, nonce)
+	for ; retries < maxRetries && nonce != ""; retries++ {
+		h = key.newJWSHeaderWithKID(url, id, nonce)
 
-	if jws, err = jwsBytes(key, h, payload); err != nil {
-		return nil, err
-	}
-
-	if req, err = http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(jws)); err != nil {
-		return res, err
-	}
-
-	req.Header.Set("Content-Type", joseMIME)
-	req.Header.Set("User-Agent", UserAgent)
-
-	res, err = http.DefaultClient.Do(req)
-	if err != nil {
-		return nil, err
-	}
-
-	nonce, err = checkResponseProblem(res)
-	if err != nil {
-		return nil, err
-	}
-	if nonce != "" {
-		if retries == maxRetries {
-			return nil, errors.New("feck")
+		if jws, err = jwsBytes(key, h, payload); err != nil {
+			return nil, err
 		}
-		retries++
-		goto retry_nonce
+
+		if req, err = http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(jws)); err != nil {
+			return nil, err
+		}
+
+		req.Header.Set("Content-Type", joseMIME)
+		req.Header.Set("User-Agent", UserAgent)
+
+		if res, err = http.DefaultClient.Do(req); err != nil {
+			return nil, err
+		}
+
+		if nonce, err = checkResponseProblem(res); err != nil {
+			return nil, err
+		}
 	}
 
-	return res, err
+	if nonce == "" {
+		return res, nil
+	}
+
+	return nil, errors.New("retries exhausted")
 }
 
 func (c Client) signedPostJWK(ctx context.Context, url string, key es256Key, payload []byte) (*http.Response, error) {
@@ -202,40 +198,36 @@ func (c Client) signedPostJWK(ctx context.Context, url string, key es256Key, pay
 		return nil, err
 	}
 
-retry_nonce:
-	if h, err = key.newJWSHeaderWithJWK(url, nonce); err != nil {
-		return nil, err
-	}
-
-	if jws, err = jwsBytes(key, h, payload); err != nil {
-		return nil, err
-	}
-
-	if req, err = http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(jws)); err != nil {
-		return res, err
-	}
-
-	req.Header.Set("Content-Type", joseMIME)
-	req.Header.Set("User-Agent", UserAgent)
-
-	res, err = http.DefaultClient.Do(req)
-	if err != nil {
-		return nil, err
-	}
-
-	nonce, err = checkResponseProblem(res)
-	if err != nil {
-		return nil, err
-	}
-	if nonce != "" {
-		if retries == maxRetries {
-			return nil, errors.New("feck")
+	for ; retries < maxRetries && nonce != ""; retries++ {
+		if h, err = key.newJWSHeaderWithJWK(url, nonce); err != nil {
+			return nil, err
 		}
-		retries++
-		goto retry_nonce
+
+		if jws, err = jwsBytes(key, h, payload); err != nil {
+			return nil, err
+		}
+
+		if req, err = http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(jws)); err != nil {
+			return nil, err
+		}
+
+		req.Header.Set("Content-Type", joseMIME)
+		req.Header.Set("User-Agent", UserAgent)
+
+		if res, err = http.DefaultClient.Do(req); err != nil {
+			return nil, err
+		}
+
+		if nonce, err = checkResponseProblem(res); err != nil {
+			return nil, err
+		}
 	}
 
-	return res, err
+	if nonce == "" {
+		return res, nil
+	}
+
+	return nil, errors.New("retries exhausted")
 }
 
 // RequestAccount requests a new or existing [Account] from the ACME server. If the provided [AccountKey]
