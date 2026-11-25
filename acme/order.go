@@ -319,10 +319,6 @@ func cleanup(ctx context.Context, fns []CleanupFunc) error {
 	return err
 }
 
-type AttemptCfg struct {
-	DnsConfirmation DNSConfirmationFunc
-}
-
 func (c Client) attempt(ctx context.Context, o *order, id string, key es256Key, domains []string, providers map[string]Provider, cfg OrderCfg) (b []byte, certKey *ecdsa.PrivateKey, err error) {
 	var (
 		ch       chan error
