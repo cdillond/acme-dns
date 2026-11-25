@@ -209,9 +209,6 @@ func (c Client) RequestAccountWithEAB(ctx context.Context, key AccountKey, eab E
 		bad      Problem
 	)
 
-	if !c.Dir.Meta.ExternalAccountRequired {
-		return acc, data, errors.New("external account binding not supported by this ACME server")
-	}
 	if eab.KID == "" {
 		return acc, data, errors.New("EABRequest KID field is required")
 	}
