@@ -282,7 +282,7 @@ func (c *Client) validateAuthz(ctx context.Context, id string, key es256Key, az 
 		case challengeStatusValid:
 			return nil
 		case challengeStatusInvalid:
-			err = ErrFailedChallenge
+			err = errors.Join(ErrFailedChallenge, fmt.Errorf("challenge %q invalid", dns.URL), raw.Error)
 			return err
 		default:
 			err = UnexpectedChallengeStatusError(raw.Status)

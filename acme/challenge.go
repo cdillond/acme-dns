@@ -12,6 +12,7 @@ type rawChallenge struct {
 	URL        string          `json:"url"`
 	Status     challengeStatus `json:"status"`
 	Token      string          `json:"token"`
+	Error      *Problem        `json:"error,omitzero"`
 	retryAfter retryAfter      `json:"-"`
 }
 
