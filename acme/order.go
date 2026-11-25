@@ -470,7 +470,7 @@ func (c *Client) pollForValidAuthz(ctx context.Context, urls []string, id string
 			i++
 			continue
 		case authzStatusPending:
-		case authzStatusInvalid:
+		case authzStatusInvalid, authzStatusDeactivated, authzStatusExpired, authzStatusRevoked:
 			return ErrFailedAuthz
 		default:
 			return UnexpectedAuthzStatusError(authz.Status)
