@@ -216,6 +216,11 @@ func (c Client) RequestAccountWithEAB(ctx context.Context, key AccountKey, eab E
 	if eab.Alg == "" {
 		return acc, data, errors.New("EABRequest Alg field is required")
 	}
+	if eab.Hash == nil {
+		return acc, data, errors.New("EABRequest Hash must not be nil")
+	}
+
+	eab.Hash.Reset()
 
 	// step 1: calculate the jwk for the account key; this will be used both in the EAB and in the JWS
 
