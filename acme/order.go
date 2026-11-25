@@ -316,7 +316,7 @@ func cleanup(ctx context.Context, fns []CleanupFunc) error {
 		err = errors.Join(err, fn(ctx))
 	}
 
-	return nil
+	return err
 }
 
 type AttemptCfg struct {
@@ -490,6 +490,15 @@ func (c *Client) pollForCertURL(ctx context.Context, url, id string, key es256Ke
 	var err error
 
 	for err = c.fetchOrder(ctx, url, id, key, out); err == nil; err = c.fetchOrder(ctx, url, id, key, out) {
+		switch out.Status {
+		case orderStatusInvalid:
+			return "", ErrFailedOrder
+		case orderStatusProcessing, orderStatusValid:
+			// at this point the order should have progressed past "pending" and "ready"
+		default:
+			return "", UnexpectedOrderStatusError(out.Status)
+		}
+
 		if out.CertificateURL != "" {
 			return out.CertificateURL, nil
 		}

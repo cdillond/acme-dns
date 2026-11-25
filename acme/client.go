@@ -61,6 +61,10 @@ func (c Client) requestNonce(ctx context.Context) (string, error) {
 		return s, err
 	}
 
+	defer func() {
+		err = errors.Join(err, res.Body.Close())
+	}()
+
 	s = res.Header.Get("Replay-Nonce")
 	if s == "" {
 		err = errors.New("no nonce provided")
