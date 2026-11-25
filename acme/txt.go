@@ -1,6 +1,6 @@
 package acme
 
-const DefaultTTL = 300
+const DefaultTTL = 60
 
 type TxtRecord struct {
 	TTL   uint16

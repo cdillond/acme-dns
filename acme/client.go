@@ -733,6 +733,9 @@ func (c Client) OrderCertificate(ctx context.Context, account Account, domains m
 	if c.PollInterval <= 0 {
 		c.PollInterval = DefaultInterval
 	}
+	if cfg.RecordTTLSeconds == 0 {
+		cfg.RecordTTLSeconds = DefaultTTL
+	}
 
 	s := slices.Collect(maps.Keys(domains))
 

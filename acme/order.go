@@ -92,6 +92,10 @@ type OrderCfg struct {
 	NotBefore time.Time
 	// Optional: not supported by all CAs.
 	NotAfter time.Time
+	// Optional: the TTL for provisioned DNS TXT records. Defaults to 60 if it is 0.
+	// Ideally, this value should be roughly equivalent to the timeout on the context.Context passed to
+	// Client.OrderCertificate.
+	RecordTTLSeconds uint16
 	// Optional: the default behavior uses [net.Resolver] with [net.Resolver.PreferGo] set to true.
 	DnsConfirmation DNSConfirmationFunc
 }
@@ -218,7 +222,7 @@ func pollForDNS(ctx context.Context, log *slog.Logger, record TxtRecord, fn DNSC
 
 }
 
-func (c *Client) provisionAuthz(ctx context.Context, key es256Key, az authz, domains map[string]Provider) (TxtRecord, CleanupFunc, error) {
+func (c *Client) provisionAuthz(ctx context.Context, key es256Key, az authz, domains map[string]Provider, ttl uint16) (TxtRecord, CleanupFunc, error) {
 	dnsChallenge := filterChallenges(az.Challenges)
 	if dnsChallenge == nil {
 		return TxtRecord{}, nil, errors.New("no dns challenge available for Authz")
@@ -235,7 +239,7 @@ func (c *Client) provisionAuthz(ctx context.Context, key es256Key, az authz, dom
 	}
 
 	txt := TxtRecord{
-		TTL:   DefaultTTL,
+		TTL:   ttl,
 		Name:  "_acme-challenge." + az.Identifier.Value,
 		Value: newDNS01Txt(dnsChallenge.Token, key),
 	}
@@ -359,7 +363,7 @@ func (c Client) attempt(ctx context.Context, o *order, id string, key es256Key, 
 	}()
 
 	for _, az = range pendingAuths {
-		if txt, fn, err = c.provisionAuthz(ctx, key, az, providers); err != nil {
+		if txt, fn, err = c.provisionAuthz(ctx, key, az, providers, cfg.RecordTTLSeconds); err != nil {
 			err = errors.Join(err, fmt.Errorf("unable to provision authz: %v", az))
 			return b, certKey, err
 		}
