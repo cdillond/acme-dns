@@ -442,6 +442,7 @@ func (c Client) newOrder(ctx context.Context, account Account, domainSlice []str
 		raw []byte
 		res *http.Response
 		dec *jsontext.Decoder
+		loc string
 	)
 
 	if raw, err = json.Marshal(orderRequest{
@@ -470,11 +471,14 @@ func (c Client) newOrder(ctx context.Context, account Account, domainSlice []str
 		return out, err
 	}
 
-	if err = json.UnmarshalDecode(dec, &out); err != nil {
+	if loc = res.Header.Get("Location"); loc == "" {
+		err = errors.New("no account location provided by the server")
 		return out, err
 	}
 
-	out.location = res.Header.Get("Location")
+	if err = json.UnmarshalDecode(dec, &out); err != nil {
+		return out, err
+	}
 
 	return out, err
 }
