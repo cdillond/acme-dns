@@ -8,9 +8,17 @@ import (
 	"time"
 )
 
+// EABRequest contains the external account binding credentials provided by a CA.
+//
+// Hash must be a keyed MAC (for example, hmac.New(sha256.New, macKey) for HS256),
+// not an unkeyed hash. Alg must be the MAC-based JWS algorithm that matches the
+// provided MAC, and the CA must support that algorithm.
 type EABRequest struct {
-	KID  string
-	Alg  string
+	// KID is the key identifier provided by the CA.
+	KID string
+	// Alg is the MAC-based JWS algorithm, such as "HS256".
+	Alg string
+	// Hash is the keyed MAC used to sign the external account binding JWS.
 	Hash hash.Hash
 }
 
