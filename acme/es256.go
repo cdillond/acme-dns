@@ -30,6 +30,9 @@ func NewAccountKey() (AccountKey, error) {
 // NewAccountKeyFromECDSAP256 constructs a new [AccountKey] from the supplied [*ecdsa.PrivateKey]. It
 // returns a non-nil error if the key's [ecdsa.PrivateKey.Curve] is not [elliptic.P256].
 func NewAccountKeyFromECDSAP256(k *ecdsa.PrivateKey) (AccountKey, error) {
+	if k == nil {
+		return AccountKey{}, errors.New("ecdsa private key must not be nil")
+	}
 	if k.Curve != elliptic.P256() {
 		return AccountKey{}, errors.New("unsupported account key type: " + string(k.Curve.Params().Name))
 	}
