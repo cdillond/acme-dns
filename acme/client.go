@@ -480,6 +480,8 @@ func (c Client) newOrder(ctx context.Context, account Account, domainSlice []str
 		return out, err
 	}
 
+	out.location = loc
+
 	return out, err
 }
 
