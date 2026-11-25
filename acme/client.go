@@ -8,6 +8,7 @@ import (
 	"encoding/json/v2"
 	"encoding/pem"
 	"errors"
+	"fmt"
 	"log/slog"
 	"maps"
 	"net/http"
@@ -45,7 +46,8 @@ type Client struct {
 	Log          *slog.Logger
 }
 
-// isValidNonce checks that the nonce is base64url-encoded
+// validateNonce returns a non-nil error if nonce is empty or nonce contains any character not included in the
+// base64url charset.
 func validateNonce(nonce string) error {
 	var (
 		i int
@@ -69,6 +71,8 @@ func validateNonce(nonce string) error {
 	return nil
 }
 
+// requestNonce requests a new Replay-Nonce from the ACME server. If the response includes a valid nonce, it returns that
+// nonce and a nil error. Otherwise, it returns an empty string and a non-nil error.
 func (c Client) requestNonce(ctx context.Context) (string, error) {
 	var (
 		s   string
@@ -99,25 +103,27 @@ func (c Client) requestNonce(ctx context.Context) (string, error) {
 	return s, err
 }
 
-func checkResponseProblem(res *http.Response) (string, error) {
+// checkResponseProblem checks if the res contains a problem. If the returned error is non-nil, the checkResult is nil.
+// If the checkResult is non-nil, its concrete type is one of [checkResultOK] and [checkResultRetry], and err is nil.
+// When the error is non-nil or the returned [checkResult] has the concrete type [checkResultRetry], the caller can
+// assume that checkResponseProblem has closed the response body of the res parameter.
+func checkResponseProblem(res *http.Response) (checkResult, error) {
 	var (
+		nonce string
 		err   error
 		bad   Problem
-		nonce string
 		dec   *jsontext.Decoder
 	)
 	if res.StatusCode < 400 {
-		return "", nil
+		return checkResultOK{}, nil
 	}
 	dec = jsontext.NewDecoder(res.Body)
 
-	defer func() {
-		err = errors.Join(err, res.Body.Close())
-	}()
+	defer res.Body.Close()
 
 	if err = json.UnmarshalDecode(dec, &bad); err != nil {
 		err = errors.Join(err, errors.New("server responded with status: "+res.Status))
-		return "", err
+		return nil, err
 	}
 
 	// per the RFC, nonce errors MUST be retried
@@ -125,14 +131,28 @@ func checkResponseProblem(res *http.Response) (string, error) {
 		nonce = res.Header.Get("Replay-Nonce")
 		if err = validateNonce(nonce); err != nil {
 			err = errors.Join(&bad, err)
+			return nil, err
 		}
-		return nonce, err
+		return checkResultRetry(nonce), nil
 	}
 
 	err = &bad
 
-	return "", err
+	return nil, err
 }
+
+type checkResult interface {
+	unwrapCheckResult()
+}
+
+type checkResultOK struct{}
+
+func (c checkResultOK) unwrapCheckResult() {}
+
+// contains a valid Replay-Nonce
+type checkResultRetry string
+
+func (c checkResultRetry) unwrapCheckResult() {}
 
 func (c Client) signedPostID(ctx context.Context, url, id string, key es256Key, payload []byte) (*http.Response, error) {
 	var (
@@ -143,6 +163,7 @@ func (c Client) signedPostID(ctx context.Context, url, id string, key es256Key, 
 		jws     []byte
 		nonce   string
 		retries int
+		x       checkResult
 	)
 
 	const maxRetries = 5
@@ -151,7 +172,7 @@ func (c Client) signedPostID(ctx context.Context, url, id string, key es256Key, 
 		return nil, err
 	}
 
-	for ; retries < maxRetries && nonce != ""; retries++ {
+	for ; retries < maxRetries; retries++ {
 		h = key.newJWSHeaderWithKID(url, id, nonce)
 
 		if jws, err = jwsBytes(key, h, payload); err != nil {
@@ -169,13 +190,19 @@ func (c Client) signedPostID(ctx context.Context, url, id string, key es256Key, 
 			return nil, err
 		}
 
-		if nonce, err = checkResponseProblem(res); err != nil {
+		if x, err = checkResponseProblem(res); err != nil {
 			return nil, err
 		}
-	}
 
-	if nonce == "" {
-		return res, nil
+		switch t := x.(type) {
+		case checkResultOK:
+			return res, nil
+		case checkResultRetry:
+			nonce = string(t)
+		default:
+			res.Body.Close()
+			return nil, fmt.Errorf("internal error: checkResponseProblem returned an unexpected result: %v", t)
+		}
 	}
 
 	return nil, errors.New("retries exhausted")
@@ -190,6 +217,7 @@ func (c Client) signedPostJWK(ctx context.Context, url string, key es256Key, pay
 		jws     []byte
 		nonce   string
 		retries int
+		x       checkResult
 	)
 
 	const maxRetries = 5
@@ -198,7 +226,7 @@ func (c Client) signedPostJWK(ctx context.Context, url string, key es256Key, pay
 		return nil, err
 	}
 
-	for ; retries < maxRetries && nonce != ""; retries++ {
+	for ; retries < maxRetries; retries++ {
 		if h, err = key.newJWSHeaderWithJWK(url, nonce); err != nil {
 			return nil, err
 		}
@@ -218,13 +246,19 @@ func (c Client) signedPostJWK(ctx context.Context, url string, key es256Key, pay
 			return nil, err
 		}
 
-		if nonce, err = checkResponseProblem(res); err != nil {
+		if x, err = checkResponseProblem(res); err != nil {
 			return nil, err
 		}
-	}
 
-	if nonce == "" {
-		return res, nil
+		switch t := x.(type) {
+		case checkResultOK:
+			return res, nil
+		case checkResultRetry:
+			nonce = string(t)
+		default:
+			res.Body.Close()
+			return nil, fmt.Errorf("internal error: checkResponseProblem returned an unexpected result: %v", t)
+		}
 	}
 
 	return nil, errors.New("retries exhausted")
