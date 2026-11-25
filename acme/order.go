@@ -493,6 +493,16 @@ func (c *Client) pollForValidAuthz(ctx context.Context, urls []string, id string
 func (c *Client) pollForCertURL(ctx context.Context, url, id string, key es256Key, out *order) (string, error) {
 	var err error
 
+	if out.CertificateURL != "" {
+		return out.CertificateURL, nil
+	}
+
+	// section 7.4 of the rfc requires the client to respect the retry-after header of the response to an
+	// order finalization request before polling for the certificate url.
+	if err = pause(ctx, out.retryAfter); err != nil {
+		return "", err
+	}
+
 	for err = c.fetchOrder(ctx, url, id, key, out); err == nil; err = c.fetchOrder(ctx, url, id, key, out) {
 		switch out.Status {
 		case orderStatusInvalid:
@@ -543,9 +553,10 @@ func (c *Client) finalize(ctx context.Context, url, id string, domains []string,
 
 func (c *Client) submitFinalize(ctx context.Context, url, id string, key es256Key, b []byte, out *order) error {
 	var (
-		res *http.Response
-		err error
-		dec *jsontext.Decoder
+		res   *http.Response
+		err   error
+		dec   *jsontext.Decoder
+		after string
 	)
 
 	if res, err = c.signedPostID(ctx, url, id, key, b); err != nil {
@@ -567,14 +578,25 @@ func (c *Client) submitFinalize(ctx context.Context, url, id string, key es256Ke
 	}
 
 	switch out.Status {
-	case orderStatusProcessing, orderStatusValid:
+	case orderStatusProcessing:
+		// rfc8555 section 7.4 requires the client to inspect the retry-after header and wait at least that
+		// long when the order is still processing; however, our retryAfter.parse() method falls back to adding
+		// an interval to the current time which we don't want. if there is no retry-after header, we can proceed
+		// to poll for the certificate url immediately.
+		after = res.Header.Get("Retry-After")
+		if after == "" {
+			out.retryAfter = retryAfter{}
+		} else {
+			out.retryAfter = retryAfter(parseRetryAfterHeader(after))
+		}
+	case orderStatusValid:
+		// we can proceed directly without worrying about the retry-after header
+		out.retryAfter = retryAfter{}
 	case orderStatusInvalid:
 		return ErrFailedOrder
 	default:
 		return UnexpectedOrderStatusError(out.Status)
 	}
-
-	out.retryAfter.parse(res, c.PollInterval)
 
 	return nil
 }

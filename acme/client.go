@@ -44,35 +44,11 @@ type Client struct {
 	// response to a request includes a Retry-After header.
 	PollInterval time.Duration
 	Log          *slog.Logger
+	cache        *nonceCache
 }
 
-// validateNonce returns a non-nil error if nonce is empty or nonce contains any character not included in the
-// base64url charset.
-func validateNonce(nonce string) error {
-	var (
-		i int
-		c byte
-	)
-	if nonce == "" {
-		return errors.New("no nonce provided")
-	}
-	for i = range nonce {
-		c = nonce[i]
-		switch {
-		case c == '-':
-		case c >= '0' && c <= '9':
-		case c >= 'A' && c <= 'Z':
-		case c == '_':
-		case c >= 'a' && c <= 'z':
-		default:
-			return errors.New("invalid nonce: " + nonce)
-		}
-	}
-	return nil
-}
-
-// requestNonce requests a new Replay-Nonce from the ACME server. If the response includes a valid nonce, it returns that
-// nonce and a nil error. Otherwise, it returns an empty string and a non-nil error.
+// requestNonce requests a new Replay-Nonce from the ACME server. If the response includes a valid nonce, it
+// returns that nonce and a nil error. Otherwise, it returns an empty string and a non-nil error.
 func (c Client) requestNonce(ctx context.Context) (string, error) {
 	var (
 		s   string
@@ -103,10 +79,33 @@ func (c Client) requestNonce(ctx context.Context) (string, error) {
 	return s, err
 }
 
-// checkResponseProblem checks if res contains a [Problem]. Non-retryable problems (i.e., those not due to a bad nonce) are
-// returned as errors. If the returned error is non-nil, the [checkResult] is nil. If the [checkResult] is non-nil, its concrete type
-// is either [checkResultOK] or [checkResultRetry]. When the error is non-nil or the returned [checkResult] has the concrete type
-// [checkResultRetry], the caller can assume that checkResponseProblem has closed the response body of the res parameter.
+func (c Client) getNonce(ctx context.Context) (string, error) {
+	if c.cache == nil {
+		return c.requestNonce(ctx)
+	}
+	nonce := c.cache.get()
+	if nonce == "" {
+		return c.requestNonce(ctx)
+	}
+	return nonce, nil
+}
+
+func (c Client) putNonce(res *http.Response) {
+	if c.cache == nil || res == nil {
+		return
+	}
+	nonce := res.Header.Get("Replay-Nonce")
+	if err := validateNonce(nonce); err != nil {
+		return
+	}
+	c.cache.put(nonce)
+}
+
+// checkResponseProblem checks if res contains a [Problem]. Non-retryable problems (i.e., those not due
+// to a bad nonce) are returned as errors. If the returned error is non-nil, the [checkResult] is nil.
+// If the [checkResult] is non-nil, its concrete type is either [checkResultOK] or [checkResultRetry].
+// When the error is non-nil or the returned [checkResult] has the concrete type[checkResultRetry], the
+// caller can assume that checkResponseProblem has closed the response body of the res parameter.
 func checkResponseProblem(res *http.Response) (checkResult, error) {
 	var (
 		nonce string
@@ -117,10 +116,10 @@ func checkResponseProblem(res *http.Response) (checkResult, error) {
 	if res.StatusCode < 400 {
 		return checkResultOK{}, nil
 	}
-	dec = jsontext.NewDecoder(res.Body)
 
 	defer res.Body.Close()
 
+	dec = jsontext.NewDecoder(res.Body)
 	if err = json.UnmarshalDecode(dec, &bad); err != nil {
 		err = errors.Join(err, errors.New("server responded with status: "+res.Status))
 		return nil, err
@@ -168,7 +167,7 @@ func (c Client) signedPostID(ctx context.Context, url, id string, key es256Key, 
 
 	const maxRetries = 5
 
-	if nonce, err = c.requestNonce(ctx); err != nil {
+	if nonce, err = c.getNonce(ctx); err != nil {
 		return nil, err
 	}
 
@@ -191,15 +190,18 @@ func (c Client) signedPostID(ctx context.Context, url, id string, key es256Key, 
 		}
 
 		if x, err = checkResponseProblem(res); err != nil {
+			c.putNonce(res)
 			return nil, err
 		}
 
 		switch t := x.(type) {
 		case checkResultOK:
+			c.putNonce(res)
 			return res, nil
 		case checkResultRetry:
 			nonce = string(t)
 		default:
+			// should be unreachable
 			res.Body.Close()
 			return nil, fmt.Errorf("internal error: checkResponseProblem returned an unexpected result: %v", t)
 		}
@@ -222,7 +224,7 @@ func (c Client) signedPostJWK(ctx context.Context, url string, key es256Key, pay
 
 	const maxRetries = 5
 
-	if nonce, err = c.requestNonce(ctx); err != nil {
+	if nonce, err = c.getNonce(ctx); err != nil {
 		return nil, err
 	}
 
@@ -247,15 +249,18 @@ func (c Client) signedPostJWK(ctx context.Context, url string, key es256Key, pay
 		}
 
 		if x, err = checkResponseProblem(res); err != nil {
+			c.putNonce(res)
 			return nil, err
 		}
 
 		switch t := x.(type) {
 		case checkResultOK:
+			c.putNonce(res)
 			return res, nil
 		case checkResultRetry:
 			nonce = string(t)
 		default:
+			// should be unreachable
 			res.Body.Close()
 			return nil, fmt.Errorf("internal error: checkResponseProblem returned an unexpected result: %v", t)
 		}
@@ -707,6 +712,7 @@ func NewClient(ctx context.Context, url string, log *slog.Logger) (Client, error
 	}
 
 	c.Log = log
+	c.cache = new(nonceCache)
 
 	return c, nil
 }
