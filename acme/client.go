@@ -46,11 +46,14 @@ type Client struct {
 }
 
 // isValidNonce checks that the nonce is base64url-encoded
-func isValidNonce(nonce string) bool {
+func validateNonce(nonce string) error {
 	var (
 		i int
 		c byte
 	)
+	if nonce == "" {
+		return errors.New("no nonce provided")
+	}
 	for i = range nonce {
 		c = nonce[i]
 		switch {
@@ -60,10 +63,10 @@ func isValidNonce(nonce string) bool {
 		case c == '_':
 		case c >= 'a' && c <= 'z':
 		default:
-			return false
+			return errors.New("invalid nonce: " + nonce)
 		}
 	}
-	return true
+	return nil
 }
 
 func (c Client) requestNonce(ctx context.Context) (string, error) {
@@ -89,8 +92,8 @@ func (c Client) requestNonce(ctx context.Context) (string, error) {
 	}()
 
 	s = res.Header.Get("Replay-Nonce")
-	if s == "" {
-		err = errors.New("no nonce provided")
+	if err = validateNonce(s); err != nil {
+		return "", err
 	}
 
 	return s, err
@@ -98,9 +101,10 @@ func (c Client) requestNonce(ctx context.Context) (string, error) {
 
 func checkResponseProblem(res *http.Response) (string, error) {
 	var (
-		err error
-		bad Problem
-		dec *jsontext.Decoder
+		err   error
+		bad   Problem
+		nonce string
+		dec   *jsontext.Decoder
 	)
 	if res.StatusCode < 400 {
 		return "", nil
@@ -112,12 +116,17 @@ func checkResponseProblem(res *http.Response) (string, error) {
 	}()
 
 	if err = json.UnmarshalDecode(dec, &bad); err != nil {
+		err = errors.Join(err, errors.New("server responded with status: "+res.Status))
 		return "", err
 	}
 
 	// per the RFC, nonce errors MUST be retried
 	if res.StatusCode == 400 && bad.Type == ProblemTypeBadNonce {
-		return res.Header.Get("Replay-Nonce"), err
+		nonce = res.Header.Get("Replay-Nonce")
+		if err = validateNonce(nonce); err != nil {
+			err = errors.Join(&bad, err)
+		}
+		return "", err
 	}
 
 	err = &bad
@@ -127,23 +136,22 @@ func checkResponseProblem(res *http.Response) (string, error) {
 
 func (c Client) signedPostID(ctx context.Context, url, id string, key es256Key, payload []byte) (*http.Response, error) {
 	var (
-		req   *http.Request
-		res   *http.Response
-		err   error
-		h     jwsHeaderWithKID
-		jws   []byte
-		nonce string
+		req     *http.Request
+		res     *http.Response
+		err     error
+		h       jwsHeaderWithKID
+		jws     []byte
+		nonce   string
+		retries int
 	)
+
+	const maxRetries = 5
 
 	if nonce, err = c.requestNonce(ctx); err != nil {
 		return nil, err
 	}
 
 retry_nonce:
-	if !isValidNonce(nonce) {
-		return nil, errors.New("invalid nonce: " + nonce)
-	}
-
 	h = key.newJWSHeaderWithKID(url, id, nonce)
 
 	if jws, err = jwsBytes(key, h, payload); err != nil {
@@ -163,10 +171,14 @@ retry_nonce:
 	}
 
 	nonce, err = checkResponseProblem(res)
-	if err == nil {
+	if err != nil {
 		return nil, err
 	}
 	if nonce != "" {
+		if retries == maxRetries {
+			return nil, errors.New("feck")
+		}
+		retries++
 		goto retry_nonce
 	}
 
@@ -175,23 +187,22 @@ retry_nonce:
 
 func (c Client) signedPostJWK(ctx context.Context, url string, key es256Key, payload []byte) (*http.Response, error) {
 	var (
-		req   *http.Request
-		res   *http.Response
-		err   error
-		h     jwsHeaderWithJWK
-		jws   []byte
-		nonce string
+		req     *http.Request
+		res     *http.Response
+		err     error
+		h       jwsHeaderWithJWK
+		jws     []byte
+		nonce   string
+		retries int
 	)
+
+	const maxRetries = 5
 
 	if nonce, err = c.requestNonce(ctx); err != nil {
 		return nil, err
 	}
 
 retry_nonce:
-	if !isValidNonce(nonce) {
-		return nil, errors.New("invalid nonce: " + nonce)
-	}
-
 	if h, err = key.newJWSHeaderWithJWK(url, nonce); err != nil {
 		return nil, err
 	}
@@ -213,10 +224,14 @@ retry_nonce:
 	}
 
 	nonce, err = checkResponseProblem(res)
-	if err == nil {
+	if err != nil {
 		return nil, err
 	}
 	if nonce != "" {
+		if retries == maxRetries {
+			return nil, errors.New("feck")
+		}
+		retries++
 		goto retry_nonce
 	}
 
@@ -557,6 +572,7 @@ func (c Client) fetchUnmarshalAuthz(ctx context.Context, url, id string, key es2
 
 	if res.StatusCode != http.StatusOK {
 		err = errors.New("server responded with an unexpected status: " + res.Status)
+		return err
 	}
 
 	dec = jsontext.NewDecoder(res.Body)

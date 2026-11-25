@@ -7,7 +7,6 @@ import (
 	"crypto/ecdsa"
 	"crypto/x509"
 	"encoding/base64"
-	"encoding/json/jsontext"
 	"encoding/json/v2"
 	"encoding/pem"
 	"errors"
@@ -171,8 +170,6 @@ func (c Client) RevokeCert(ctx context.Context, account Account, cert *x509.Cert
 		err     error
 		payload []byte
 		res     *http.Response
-		dec     *jsontext.Decoder
-		bad     Problem
 		r       = certRevocationRequest{
 			Certificate: base64.RawURLEncoding.EncodeToString(cert.Raw),
 			Reason:      reason,
@@ -196,11 +193,8 @@ func (c Client) RevokeCert(ctx context.Context, account Account, cert *x509.Cert
 	}()
 
 	if res.StatusCode != http.StatusOK {
-		dec = jsontext.NewDecoder(res.Body)
-		if err = json.UnmarshalDecode(dec, &bad); err != nil {
-			return err
-		}
-		return &bad
+		err = errors.New("server responded with an unexpected status: " + res.Status)
+		return err
 	}
 
 	return nil
