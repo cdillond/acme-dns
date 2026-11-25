@@ -161,7 +161,7 @@ const (
 
 type certRevocationRequest struct {
 	Certificate string           `json:"certificate"`
-	Reason      RevocationReason `json:"reason"`
+	Reason      RevocationReason `json:"reason,omitzero"`
 }
 
 // RevokeCert revokes a certificate. For a [Certificate] returned from [Client.OrderCertificate], only the
