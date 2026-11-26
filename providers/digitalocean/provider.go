@@ -88,6 +88,7 @@ func (p *Provider) deprovision(ctx context.Context, recordID int) error {
 	var (
 		log    = acme.ExtractLogger(ctx)
 		apiErr *godo.ErrorResponse
+		ok     bool
 		err    error
 	)
 
@@ -110,13 +111,14 @@ func (p *Provider) deprovision(ctx context.Context, recordID int) error {
 		}
 		return nil
 	}
-
-	// A record that is already gone is treated as a successful cleanup.
-	if errors.As(err, &apiErr) && apiErr.Response != nil && apiErr.Response.StatusCode == http.StatusNotFound {
-		if log != nil {
-			log.InfoContext(ctx, "dns record already deleted")
+	if apiErr, ok = errors.AsType[*godo.ErrorResponse](err); ok {
+		// A record that is already gone is treated as a successful cleanup.
+		if apiErr.Response != nil && apiErr.Response.StatusCode == http.StatusNotFound {
+			if log != nil {
+				log.InfoContext(ctx, "dns record already deleted")
+			}
+			return nil
 		}
-		return nil
 	}
 
 	return fmt.Errorf("digitalocean: delete TXT record %d: %w", recordID, err)
