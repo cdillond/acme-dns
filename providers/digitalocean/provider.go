@@ -39,7 +39,7 @@ func NewProvider(token, baseDomain string) *Provider {
 
 // Provision creates the ACME challenge TXT record. The returned cleanup function
 // deletes the same record.
-func (p *Provider) Provision(ctx context.Context, record acme.TxtRecord) (acme.CleanupFunc, error) {
+func (p *Provider) Provision(ctx context.Context, record acme.TXTRecord) (acme.CleanupFunc, error) {
 	var (
 		log = acme.ExtractLogger(ctx)
 		req = godo.DomainRecordEditRequest{

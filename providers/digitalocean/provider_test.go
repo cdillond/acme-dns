@@ -36,7 +36,7 @@ func TestProvisionCreatesRelativeTXTRecord(t *testing.T) {
 	}
 	p := &Provider{client: client, baseDomain: "example.com"}
 
-	cleanup, err := p.Provision(context.Background(), acme.TxtRecord{
+	cleanup, err := p.Provision(context.Background(), acme.TXTRecord{
 		TTL:   60,
 		Name:  "_acme-challenge.www.example.com",
 		Value: "challenge-value",
@@ -73,7 +73,7 @@ func TestProvisionRejectsRecordOutsideBaseDomain(t *testing.T) {
 	client := &fakeDomainsClient{}
 	p := &Provider{client: client, baseDomain: "example.com"}
 
-	if _, err := p.Provision(context.Background(), acme.TxtRecord{
+	if _, err := p.Provision(context.Background(), acme.TXTRecord{
 		Name:  "_acme-challenge.example.net",
 		Value: "challenge-value",
 	}); err == nil {

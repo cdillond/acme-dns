@@ -11,7 +11,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log/slog"
 	"net"
 	"net/http"
 	"slices"
@@ -93,11 +92,10 @@ type OrderCfg struct {
 	// Optional: not supported by all CAs.
 	NotAfter time.Time
 	// Optional: the TTL for provisioned DNS TXT records. Defaults to 60 if it is 0.
-	// Ideally, this value should be roughly equivalent to the timeout on the context.Context passed to
-	// Client.OrderCertificate.
 	RecordTTLSeconds uint16
-	// Optional: the default behavior uses [net.Resolver] with [net.Resolver.PreferGo] set to true.
-	DnsConfirmation DNSConfirmationFunc
+	// Optional: the resolver used when confirming that provisioned DNS records have propagated.
+	// If nil, it defaults to the standard library's PreferGo resolver.
+	Resolver *net.Resolver
 }
 
 func identifiers(domains []string) []Identifier {
@@ -146,86 +144,10 @@ func defaultCleanupFn(ctx context.Context) error {
 	return nil
 }
 
-// When performing an ACME dns challenge (as part of [Client.OrderCertificate]), the [Client] confirms
-// that all provisioned TXT records are publicly accessible before prompting the server to validate
-// the challenge. By default, it does this by resolving each provisioned TXT record using the standard
-// library's [net.Resolver], with [net.Resolver.PreferGo] set to true. On platforms where the Go resolver
-// is not supported, and on builds where the Go resolver is explicitly disabled, the default behavior may
-// run into timeouts caused by the platform's recursive resolver cache.
-// To avoid this issue, users can supply a [DNSConfirmationFunc] that resolves the [TxtRecord] and returns
-// true if the resolution succeeded. A potential implementation may choose to query a domain's authoritative
-// name servers, rely on an external DNS server (such as 1.1.1.1), or (not recommended) skip confirmation
-// entirely.
-type DNSConfirmationFunc func(context.Context, TxtRecord) (bool, error)
-
-func confirmTXT(ctx context.Context, record TxtRecord) (bool, error) {
-	var (
-		s   []string
-		err error
-	)
-
-	if s, err = (&net.Resolver{PreferGo: true}).LookupTXT(ctx, record.Name); err != nil {
-		return false, err
-	}
-
-	return slices.Contains(s, record.Value), nil
-}
-
-func pollForDNS(ctx context.Context, log *slog.Logger, record TxtRecord, fn DNSConfirmationFunc, interval time.Duration) error {
-	var (
-		err       error
-		dnsErr    *net.DNSError
-		ok, found bool
-	)
-
-	if log != nil {
-		log = log.With("record", record)
-		log.InfoContext(ctx, "querying dns")
-	}
-
-	if fn == nil {
-		fn = confirmTXT
-	}
-
-	for {
-		found, err = fn(ctx, record)
-
-		switch {
-		case !found && err == nil:
-			if log != nil {
-				log.WarnContext(ctx, "record not confirmed", "reason", "potential stale dns cache")
-			}
-		case err != nil:
-			if log != nil {
-				log.WarnContext(ctx, "record not confirmed", "err", err)
-			}
-			if dnsErr, ok = errors.AsType[*net.DNSError](err); ok {
-				if dnsErr.IsNotFound || dnsErr.IsTemporary {
-					break
-				}
-			}
-			return err
-		default:
-			if log != nil {
-				log.InfoContext(ctx, "record propagation confirmed")
-			}
-			return nil
-		}
-
-		select {
-		case <-time.After(interval):
-		case <-ctx.Done():
-			return ctx.Err()
-		}
-
-	}
-
-}
-
-func (c *Client) provisionAuthz(ctx context.Context, key es256Key, az authz, domains map[string]Provider, ttl uint16) (TxtRecord, CleanupFunc, error) {
+func (c *Client) provisionAuthz(ctx context.Context, key es256Key, az authz, domains map[string]Provider, ttl uint16) (TXTRecord, CleanupFunc, error) {
 	dnsChallenge := filterChallenges(az.Challenges)
 	if dnsChallenge == nil {
-		return TxtRecord{}, nil, errors.New("no dns challenge available for Authz")
+		return TXTRecord{}, nil, errors.New("no dns challenge available for Authz")
 	}
 
 	n := az.Identifier.Value
@@ -235,10 +157,10 @@ func (c *Client) provisionAuthz(ctx context.Context, key es256Key, az authz, dom
 
 	p := domains[n]
 	if p == nil {
-		return TxtRecord{}, nil, errors.New("could not find registered provider")
+		return TXTRecord{}, nil, errors.New("could not find registered provider")
 	}
 
-	txt := TxtRecord{
+	txt := TXTRecord{
 		TTL:   ttl,
 		Name:  "_acme-challenge." + az.Identifier.Value,
 		Value: newDNS01Txt(dnsChallenge.Token, key),
@@ -246,7 +168,7 @@ func (c *Client) provisionAuthz(ctx context.Context, key es256Key, az authz, dom
 
 	cleanup, err := p.Provision(withLogger(ctx, c.Log), txt)
 	if err != nil {
-		return TxtRecord{}, nil, err
+		return TXTRecord{}, nil, err
 	}
 	if cleanup == nil {
 		cleanup = defaultCleanupFn
@@ -329,9 +251,9 @@ func (c Client) attempt(ctx context.Context, o *order, id string, key es256Key, 
 		az                            authz
 		auths, pendingAuths, badAuths []authz
 		url                           string
-		txt                           TxtRecord
+		txt                           TXTRecord
 		fn                            CleanupFunc
-		records                       []TxtRecord
+		records                       []TXTRecord
 		cleanups                      []CleanupFunc
 		i                             int
 	)
@@ -373,7 +295,7 @@ func (c Client) attempt(ctx context.Context, o *order, id string, key es256Key, 
 	}
 
 	for _, txt = range records {
-		if err = pollForDNS(ctx, c.Log, txt, cfg.DnsConfirmation, c.PollInterval); err != nil {
+		if err = pollForDNS(ctx, c.Log, cfg.Resolver, txt, c.PollInterval); err != nil {
 			err = errors.Join(fmt.Errorf("unable to confirm dns record: %v", txt), err)
 			return b, certKey, err
 		}

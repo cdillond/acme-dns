@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"log/slog"
 	"maps"
+	"net"
 	"net/http"
 	"slices"
 	"time"
@@ -735,6 +736,9 @@ func (c Client) OrderCertificate(ctx context.Context, account Account, domains m
 	}
 	if cfg.RecordTTLSeconds == 0 {
 		cfg.RecordTTLSeconds = DefaultTTL
+	}
+	if cfg.Resolver == nil {
+		cfg.Resolver = &net.Resolver{PreferGo: true}
 	}
 
 	s := slices.Collect(maps.Keys(domains))
