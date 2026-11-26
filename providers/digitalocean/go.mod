@@ -4,7 +4,7 @@ go 1.27.3
 
 require (
 	github.com/digitalocean/godo v1.244.0
-	go.ciaran.lol/acme-dns/acme v0.0.0
+	go.ciaran.lol/acme-dns/acme v0.0.10
 )
 
 require (
