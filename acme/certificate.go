@@ -166,6 +166,13 @@ type certRevocationRequest struct {
 // RevokeCert revokes a certificate. For a [Certificate] returned from [Client.OrderCertificate], only the
 // initial [*x509.Certificate] in [Certificate.Chain] should be revoked.
 func (c Client) RevokeCert(ctx context.Context, account Account, cert *x509.Certificate, reason RevocationReason) error {
+	if cert == nil {
+		return errors.New("cert must not be nil")
+	}
+	if cert.IsCA {
+		return errors.New("cannot revoke CA certificate; only revoke a chain's leaf certificate")
+	}
+
 	var (
 		err     error
 		payload []byte
@@ -175,10 +182,6 @@ func (c Client) RevokeCert(ctx context.Context, account Account, cert *x509.Cert
 			Reason:      reason,
 		}
 	)
-
-	if cert.IsCA {
-		return errors.New("cannot revoke CA certificate; only revoke the initial cert in a chain")
-	}
 
 	if payload, err = json.Marshal(&r); err != nil {
 		return err

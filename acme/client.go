@@ -105,7 +105,7 @@ func (c Client) putNonce(res *http.Response) {
 // checkResponseProblem checks if res contains a [Problem]. Non-retryable problems (i.e., those not due
 // to a bad nonce) are returned as errors. If the returned error is non-nil, the [checkResult] is nil.
 // If the [checkResult] is non-nil, its concrete type is either [checkResultOK] or [checkResultRetry].
-// When the error is non-nil or the returned [checkResult] has the concrete type[checkResultRetry], the
+// When the error is non-nil or the returned [checkResult] has the concrete type [checkResultRetry], the
 // caller can assume that checkResponseProblem has closed the response body of the res parameter.
 func checkResponseProblem(res *http.Response) (checkResult, error) {
 	var (
