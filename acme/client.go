@@ -142,17 +142,17 @@ func checkResponseProblem(res *http.Response) (checkResult, error) {
 }
 
 type checkResult interface {
-	unwrapCheckResult()
+	isCheckResult()
 }
 
 type checkResultOK struct{}
 
-func (c checkResultOK) unwrapCheckResult() {}
+func (c checkResultOK) isCheckResult() {}
 
 // contains a valid Replay-Nonce
 type checkResultRetry string
 
-func (c checkResultRetry) unwrapCheckResult() {}
+func (c checkResultRetry) isCheckResult() {}
 
 func (c Client) signedPostID(ctx context.Context, url, id string, key es256Key, payload []byte) (*http.Response, error) {
 	var (
