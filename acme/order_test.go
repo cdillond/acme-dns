@@ -46,15 +46,15 @@ func TestFilterChallengesFindsDNS01(t *testing.T) {
 		{Type: "http-01", Token: "http"},
 		{Type: "dns-01", Token: "dns"},
 	}
-	got := filterChallenges(src)
+	got := pickDNSChallenge(src)
 	if got == nil {
-		t.Fatal("filterChallenges returned nil")
+		t.Fatal("pickDNSChallenge returned nil")
 	}
 	if got.Type != "dns-01" || got.Token != "dns" {
 		t.Fatalf("challenge = %+v, want dns-01 challenge", got)
 	}
-	if filterChallenges([]challenge{{Type: "http-01"}}) != nil {
-		t.Fatal("filterChallenges returned a challenge when no dns-01 was present")
+	if pickDNSChallenge([]challenge{{Type: "http-01"}}) != nil {
+		t.Fatal("pickDNSChallenge returned a challenge when no dns-01 was present")
 	}
 }
 

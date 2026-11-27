@@ -1,8 +1,10 @@
 package acme
 
 import (
+	"context"
 	"encoding/json/jsontext"
 	"errors"
+	"fmt"
 	"slices"
 	"time"
 )
@@ -14,6 +16,42 @@ type rawChallenge struct {
 	Token      string          `json:"token"`
 	Error      *Problem        `json:"error,omitzero"`
 	retryAfter retryAfter      `json:"-"`
+}
+
+func (r *rawChallenge) poll(ctx context.Context, c *Client, id string, key es256Key) error {
+	var err error
+	switch r.Status {
+	case challengeStatusInvalid:
+		return joinProblem(errors.Join(ErrFailedChallenge, fmt.Errorf("challenge %q invalid", r.URL)), r.Error)
+	case challengeStatusPending, challengeStatusProcessing:
+	case challengeStatusValid:
+		return nil
+	default:
+		return UnexpectedChallengeStatusError(r.Status)
+	}
+
+	for err = r.fetch(ctx, c, id, key); err == nil; err = r.fetch(ctx, c, id, key) {
+		switch r.Status {
+		case challengeStatusInvalid:
+			return joinProblem(errors.Join(ErrFailedChallenge, fmt.Errorf("challenge %q invalid", r.URL)), r.Error)
+		case challengeStatusPending, challengeStatusProcessing:
+		case challengeStatusValid:
+			return nil
+		default:
+			return UnexpectedChallengeStatusError(r.Status)
+		}
+
+		if err = pause(ctx, r.retryAfter); err != nil {
+			return err
+		}
+	}
+	return err
+}
+
+func (r *rawChallenge) fetch(ctx context.Context, c *Client, id string, key es256Key) error {
+	var err error
+	*r, err = c.fetchRawChallenge(ctx, r.URL, id, key)
+	return err
 }
 
 type challenge struct {

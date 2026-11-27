@@ -12,7 +12,6 @@ import (
 	"io"
 	"math/big"
 	"net/http"
-	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -321,7 +320,11 @@ func TestSignedPostJWKRetriesBadNonce(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer res.Body.Close()
+
+	defer func() {
+		_ = res.Body.Close()
+	}()
+
 	if res.StatusCode != http.StatusCreated {
 		t.Errorf("status = %d, want %d", res.StatusCode, http.StatusCreated)
 	}
@@ -981,48 +984,6 @@ func TestFetchRawChallenge(t *testing.T) {
 	}
 }
 
-func TestFetchAuthz(t *testing.T) {
-	key, err := NewAccountKey()
-	if err != nil {
-		t.Fatal(err)
-	}
-	srv := fixtures.NewServer(t)
-	accountID := srv.Endpoint("acct/1")
-	for i, name := range []string{"one.example.com", "two.example.com"} {
-		srv.Respond(http.MethodPost, "/authz/"+strconv.Itoa(i+1), fixtures.Response{
-			Status: http.StatusOK,
-			Body: fixtures.JSON(t, map[string]any{
-				"identifier": map[string]any{"type": "dns", "value": name},
-				"status":     "valid",
-			}),
-		})
-	}
-
-	c := Client{
-		Dir:   ACMEDirectory{NewNonce: srv.Endpoint("newNonce")},
-		cache: new(nonceCache),
-	}
-	urls := []string{srv.Endpoint("authz/1"), srv.Endpoint("authz/2")}
-	out, err := c.fetchAuthz(context.Background(), urls, accountID, key.es256Key)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(out) != 2 {
-		t.Fatalf("authorizations = %d, want 2", len(out))
-	}
-	for i, want := range []string{"one.example.com", "two.example.com"} {
-		if out[i].Identifier.Value != want || out[i].Status != authzStatusValid {
-			t.Errorf("authorization %d = %+v, want %s valid", i, out[i], want)
-		}
-	}
-	if got := srv.Count(http.MethodPost, "/authz/1"); got != 1 {
-		t.Errorf("first authz POST count = %d, want 1", got)
-	}
-	if got := srv.Count(http.MethodPost, "/authz/2"); got != 1 {
-		t.Errorf("second authz POST count = %d, want 1", got)
-	}
-}
-
 func testEABRequest() EABRequest {
 	return EABRequest{
 		KID:  "eab-kid",
@@ -1657,82 +1618,5 @@ func TestChallengeFetchHelpersErrors(t *testing.T) {
 		c := fixtureClient(srv)
 		_, err := c.acceptChallenge(context.Background(), srv.Endpoint("chall/1"), "acct/1", key.es256Key)
 		requireProblemError(t, err, ProblemTypeUnauthorized)
-	})
-}
-
-func TestFetchAuthzErrors(t *testing.T) {
-	t.Run("transport error", func(t *testing.T) {
-		srv := closedFixtureServer(t)
-		key := fixtureKey(t)
-		c := fixtureClient(srv)
-		out, err := c.fetchAuthz(context.Background(), []string{srv.Endpoint("authz/1")}, "acct/1", key.es256Key)
-		if err == nil {
-			t.Error("fetchAuthz succeeded against an unreachable server")
-		}
-		if out != nil {
-			t.Errorf("authorizations = %+v, want nil on error", out)
-		}
-	})
-
-	t.Run("error response with problem document", func(t *testing.T) {
-		srv := fixtures.NewServer(t)
-		srv.Respond(http.MethodPost, "/authz/1", fixtures.Response{
-			Status: http.StatusOK,
-			Body:   fixtureAuthzBody(t, "one.example.com", "valid"),
-		})
-		srv.Respond(http.MethodPost, "/authz/2", fixtures.Response{
-			Status: http.StatusForbidden,
-			Body:   testProblemJSON(t, ProblemTypeUnauthorized),
-		})
-		key := fixtureKey(t)
-		c := fixtureClient(srv)
-		urls := []string{srv.Endpoint("authz/1"), srv.Endpoint("authz/2")}
-		out, err := c.fetchAuthz(context.Background(), urls, "acct/1", key.es256Key)
-		requireProblemError(t, err, ProblemTypeUnauthorized)
-		if out != nil {
-			t.Errorf("authorizations = %+v, want nil on error", out)
-		}
-	})
-
-	t.Run("invalid body", func(t *testing.T) {
-		srv := fixtures.NewServer(t)
-		srv.Respond(http.MethodPost, "/authz/1", fixtures.Response{
-			Status: http.StatusOK,
-			Body:   fixtureAuthzBody(t, "one.example.com", "valid"),
-		})
-		srv.Respond(http.MethodPost, "/authz/2", fixtures.Response{
-			Status: http.StatusOK,
-			Body:   []byte("not json"),
-		})
-		key := fixtureKey(t)
-		c := fixtureClient(srv)
-		urls := []string{srv.Endpoint("authz/1"), srv.Endpoint("authz/2")}
-		out, err := c.fetchAuthz(context.Background(), urls, "acct/1", key.es256Key)
-		if err == nil {
-			t.Error("fetchAuthz accepted a malformed body")
-		}
-		if out != nil {
-			t.Errorf("authorizations = %+v, want nil on error", out)
-		}
-	})
-
-	t.Run("unexpected success status", func(t *testing.T) {
-		srv := fixtures.NewServer(t)
-		srv.Respond(http.MethodPost, "/authz/1", fixtures.Response{
-			Status: http.StatusOK,
-			Body:   fixtureAuthzBody(t, "one.example.com", "valid"),
-		})
-		srv.Respond(http.MethodPost, "/authz/2", fixtures.Response{
-			Status: http.StatusAccepted,
-			Body:   fixtureAuthzBody(t, "two.example.com", "valid"),
-		})
-		key := fixtureKey(t)
-		c := fixtureClient(srv)
-		urls := []string{srv.Endpoint("authz/1"), srv.Endpoint("authz/2")}
-		out, err := c.fetchAuthz(context.Background(), urls, "acct/1", key.es256Key)
-		requireErrorContaining(t, err, "unexpected status")
-		if out != nil {
-			t.Errorf("authorizations = %+v, want nil on error", out)
-		}
 	})
 }

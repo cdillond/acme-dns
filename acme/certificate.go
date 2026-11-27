@@ -110,7 +110,7 @@ func (c Certificate) ChainDER() []byte {
 // the decoded blocks. The output of this function may be passed to, for example, [x509.ParseCertificates].
 func DecodePEM(b []byte) []byte {
 	var (
-		out   []byte = make([]byte, 0, len(b))
+		out   = make([]byte, 0, len(b))
 		block *pem.Block
 	)
 
@@ -190,10 +190,8 @@ func (c Client) RevokeCert(ctx context.Context, account Account, cert *x509.Cert
 	if res, err = c.signedPostID(ctx, c.Dir.RevokeCert, account.ID, account.Key.es256Key, payload); err != nil {
 		return err
 	}
-
-	defer func() {
-		err = errors.Join(err, res.Body.Close())
-	}()
+	//nolint: errcheck
+	defer res.Body.Close()
 
 	if res.StatusCode != http.StatusOK {
 		err = errors.New("server responded with an unexpected status: " + res.Status)

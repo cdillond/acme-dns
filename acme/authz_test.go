@@ -39,26 +39,6 @@ func TestAuthzStatusRoundTrip(t *testing.T) {
 	}
 }
 
-func TestPartitionAuthz(t *testing.T) {
-	src := []authz{
-		{Identifier: Identifier{Value: "pending.example.com"}, Status: authzStatusPending},
-		{Identifier: Identifier{Value: "valid.example.com"}, Status: authzStatusValid},
-		{Identifier: Identifier{Value: "invalid.example.com"}, Status: authzStatusInvalid},
-		{Identifier: Identifier{Value: "expired.example.com"}, Status: authzStatusExpired},
-	}
-
-	pending, valid, bad := partitionAuthz(src)
-	if len(pending) != 1 || pending[0].Identifier.Value != "pending.example.com" {
-		t.Errorf("pending = %+v", pending)
-	}
-	if len(valid) != 1 || valid[0].Identifier.Value != "valid.example.com" {
-		t.Errorf("valid = %+v", valid)
-	}
-	if len(bad) != 2 || bad[0].Identifier.Value != "invalid.example.com" || bad[1].Identifier.Value != "expired.example.com" {
-		t.Errorf("bad = %+v", bad)
-	}
-}
-
 func TestAuthzStatusUnmarshalJSONFromReadError(t *testing.T) {
 	var status authzStatus
 	if err := json.Unmarshal([]byte(`"`), &status); err == nil {

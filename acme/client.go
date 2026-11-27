@@ -67,10 +67,8 @@ func (c Client) requestNonce(ctx context.Context) (string, error) {
 	if res, err = http.DefaultClient.Do(req); err != nil {
 		return s, err
 	}
-
-	defer func() {
-		err = errors.Join(err, res.Body.Close())
-	}()
+	//nolint: errcheck
+	defer res.Body.Close()
 
 	s = res.Header.Get("Replay-Nonce")
 	if err = validateNonce(s); err != nil {
@@ -117,7 +115,7 @@ func checkResponseProblem(res *http.Response) (checkResult, error) {
 	if res.StatusCode < 400 {
 		return checkResultOK{}, nil
 	}
-
+	//nolint: errcheck
 	defer res.Body.Close()
 
 	dec = jsontext.NewDecoder(res.Body)
@@ -203,6 +201,7 @@ func (c Client) signedPostID(ctx context.Context, url, id string, key es256Key, 
 			nonce = string(t)
 		default:
 			// should be unreachable
+			//nolint: errcheck
 			res.Body.Close()
 			return nil, fmt.Errorf("internal error: checkResponseProblem returned an unexpected result: %v", t)
 		}
@@ -262,6 +261,7 @@ func (c Client) signedPostJWK(ctx context.Context, url string, key es256Key, pay
 			nonce = string(t)
 		default:
 			// should be unreachable
+			//nolint: errcheck
 			res.Body.Close()
 			return nil, fmt.Errorf("internal error: checkResponseProblem returned an unexpected result: %v", t)
 		}
@@ -299,10 +299,8 @@ func (c Client) RequestAccount(ctx context.Context, key AccountKey, cfg AccountC
 	if res, err = c.signedPostJWK(ctx, c.Dir.NewAccount, key.es256Key, raw); err != nil {
 		return acc, data, err
 	}
-
-	defer func() {
-		err = errors.Join(err, res.Body.Close())
-	}()
+	//nolint: errcheck
+	defer res.Body.Close()
 
 	if res.StatusCode != http.StatusOK && res.StatusCode != http.StatusCreated {
 		err = errors.New("server responded with an unexpected status: " + res.Status)
@@ -375,10 +373,8 @@ func (c Client) RequestAccountWithEAB(ctx context.Context, key AccountKey, eab E
 	if res, err = c.signedPostJWK(ctx, c.Dir.NewAccount, key.es256Key, payload); err != nil {
 		return acc, data, err
 	}
-
-	defer func() {
-		err = errors.Join(err, res.Body.Close())
-	}()
+	//nolint: errcheck
+	defer res.Body.Close()
 
 	if res.StatusCode != http.StatusOK && res.StatusCode != http.StatusCreated {
 		err = errors.New("server responded with an unexpected status: " + res.Status)
@@ -390,7 +386,6 @@ func (c Client) RequestAccountWithEAB(ctx context.Context, key AccountKey, eab E
 	}
 
 	dec = jsontext.NewDecoder(res.Body)
-
 	if err = json.UnmarshalDecode(dec, &data); err != nil {
 		return acc, data, err
 	}
@@ -423,10 +418,8 @@ func (c Client) DeactivateAccount(ctx context.Context, account Account) (Account
 	if res, err = c.signedPostID(ctx, account.ID, account.ID, account.Key.es256Key, b); err != nil {
 		return data, err
 	}
-
-	defer func() {
-		err = errors.Join(err, res.Body.Close())
-	}()
+	//nolint: errcheck
+	defer res.Body.Close()
 
 	if res.StatusCode != http.StatusOK {
 		err = errors.New("server responded with an unexpected status: " + res.Status)
@@ -463,10 +456,8 @@ func (c Client) UpdateAccountContact(ctx context.Context, account Account, conta
 	if res, err = c.signedPostID(ctx, account.ID, account.ID, account.Key.es256Key, b); err != nil {
 		return data, err
 	}
-
-	defer func() {
-		err = errors.Join(err, res.Body.Close())
-	}()
+	//nolint: errcheck
+	defer res.Body.Close()
 
 	if res.StatusCode != http.StatusOK {
 		err = errors.New("server responded with an unexpected status: " + res.Status)
@@ -524,10 +515,8 @@ func (c Client) UpdateAccountKey(ctx context.Context, account Account, newKey Ac
 	if res, err = c.signedPostID(ctx, c.Dir.KeyChange, account.ID, account.Key.es256Key, payload); err != nil {
 		return out, err
 	}
-
-	defer func() {
-		err = errors.Join(err, res.Body.Close())
-	}()
+	//nolint: errcheck
+	defer res.Body.Close()
 
 	if res.StatusCode != http.StatusOK {
 		err = errors.New("server responded with an unexpected status: " + res.Status)
@@ -561,10 +550,8 @@ func (c Client) newOrder(ctx context.Context, account Account, domainSlice []str
 	if res, err = c.signedPostID(ctx, c.Dir.NewOrder, account.ID, account.Key.es256Key, raw); err != nil {
 		return out, err
 	}
-
-	defer func() {
-		err = errors.Join(err, res.Body.Close())
-	}()
+	//nolint: errcheck
+	defer res.Body.Close()
 
 	if res.StatusCode != http.StatusCreated {
 		err = errors.New("server responded with an unexpected status: " + res.Status)
@@ -597,10 +584,8 @@ func (c Client) fetchUnmarshalAuthz(ctx context.Context, url, id string, key es2
 	if err != nil {
 		return err
 	}
-
-	defer func() {
-		err = errors.Join(err, res.Body.Close())
-	}()
+	//nolint: errcheck
+	defer res.Body.Close()
 
 	if res.StatusCode != http.StatusOK {
 		err = errors.New("server responded with an unexpected status: " + res.Status)
@@ -627,10 +612,8 @@ func (c Client) fetchChallenge(ctx context.Context, url, id string, key es256Key
 	if res, err = c.signedPostID(ctx, url, id, key, payload); err != nil {
 		return out, err
 	}
-
-	defer func() {
-		err = errors.Join(err, res.Body.Close())
-	}()
+	//nolint: errcheck
+	defer res.Body.Close()
 
 	if res.StatusCode != http.StatusOK {
 		err = errors.New("server responded with an unexpected status: " + res.Status)
@@ -660,23 +643,6 @@ func (c Client) acceptChallenge(ctx context.Context, url, id string, key es256Ke
 	return c.fetchChallenge(ctx, url, id, key, []byte("{}"))
 }
 
-func (c Client) fetchAuthz(ctx context.Context, urls []string, id string, key es256Key) ([]authz, error) {
-	var (
-		err error
-		i   int
-		url string
-		out = make([]authz, len(urls))
-	)
-
-	for i, url = range urls {
-		if err = c.fetchUnmarshalAuthz(ctx, url, id, key, &out[i]); err != nil {
-			return nil, err
-		}
-	}
-
-	return out, nil
-}
-
 // NewClient fetches the ACME directory at url and returns a Client using log. If log is nil
 // no logging is performed.
 func NewClient(ctx context.Context, url string, log *slog.Logger) (Client, error) {
@@ -697,17 +663,14 @@ func NewClient(ctx context.Context, url string, log *slog.Logger) (Client, error
 	if res, err = http.DefaultClient.Do(req); err != nil {
 		return c, err
 	}
-
-	defer func() {
-		err = errors.Join(err, res.Body.Close())
-	}()
-
-	dec = jsontext.NewDecoder(res.Body)
+	//nolint: errcheck
+	defer res.Body.Close()
 
 	if res.StatusCode != http.StatusOK {
 		return c, errors.New("server responded with an unexpected status: " + res.Status)
 	}
 
+	dec = jsontext.NewDecoder(res.Body)
 	if err = json.UnmarshalDecode(dec, &c.Dir); err != nil {
 		return c, err
 	}

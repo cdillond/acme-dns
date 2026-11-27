@@ -5,7 +5,6 @@ import (
 	"context"
 	"crypto/ecdsa"
 	"crypto/elliptic"
-	"crypto/rand"
 	"encoding/json/jsontext"
 	"encoding/json/v2"
 	"errors"
@@ -43,11 +42,9 @@ var orderStrings = [orderStatusUnknown]string{
 
 func newOrderStatus(s string) orderStatus {
 	n := slices.Index(orderStrings[:], s)
-
 	if n == -1 {
 		return orderStatusUnknown
 	}
-
 	return orderStatus(n)
 }
 
@@ -55,7 +52,6 @@ func (o orderStatus) String() string {
 	if o >= orderStatusUnknown {
 		return "unknown"
 	}
-
 	return orderStrings[o]
 }
 
@@ -131,7 +127,7 @@ type order struct {
 	retryAfter retryAfter `json:"-"`
 }
 
-func filterChallenges(src []challenge) *challenge {
+func pickDNSChallenge(src []challenge) *challenge {
 	for i := range src {
 		if src[i].Type == "dns-01" {
 			return &src[i]
@@ -140,191 +136,34 @@ func filterChallenges(src []challenge) *challenge {
 	return nil
 }
 
-func defaultCleanupFn(ctx context.Context) error {
-	return nil
-}
-
-func (c *Client) provisionAuthz(ctx context.Context, key es256Key, az authz, domains map[string]Provider, ttl uint16) (TXTRecord, CleanupFunc, error) {
-	dnsChallenge := filterChallenges(az.Challenges)
-	if dnsChallenge == nil {
-		return TXTRecord{}, nil, errors.New("no dns challenge available for Authz")
+func cleanup(ctx context.Context, fn CleanupFunc) error {
+	if fn == nil {
+		return nil
 	}
 
-	n := az.Identifier.Value
-	if az.Wildcard {
-		n = "*." + n
-	}
-
-	p := domains[n]
-	if p == nil {
-		return TXTRecord{}, nil, errors.New("could not find registered provider")
-	}
-
-	txt := TXTRecord{
-		TTL:   ttl,
-		Name:  "_acme-challenge." + az.Identifier.Value,
-		Value: newDNS01Txt(dnsChallenge.Token, key),
-	}
-
-	cleanup, err := p.Provision(withLogger(ctx, c.Log), txt)
-	if err != nil {
-		return TXTRecord{}, nil, err
-	}
-	if cleanup == nil {
-		cleanup = defaultCleanupFn
-	}
-
-	return txt, cleanup, nil
-}
-
-func (c *Client) validateAuthz(ctx context.Context, id string, key es256Key, az authz) error {
-	var (
-		dns *challenge
-		raw rawChallenge
-		err error
-	)
-
-	defer func() {
-		if err != nil {
-			err = errors.Join(err, fmt.Errorf("unable to validate authz: %v", az))
-		}
-	}()
-
-	dns = filterChallenges(az.Challenges)
-	if dns == nil {
-		err = errors.New("no dns challenge available for Authz")
-		return err
-	}
-
-	raw, err = c.acceptChallenge(ctx, dns.URL, id, key)
-
-	for err == nil {
-		switch raw.Status {
-		case challengeStatusPending, challengeStatusProcessing:
-			if c.Log != nil {
-				c.Log.Info("waiting for server challenge update", "challenge", raw)
-			}
-			// keep polling; no retry limit
-		case challengeStatusValid:
-			return nil
-		case challengeStatusInvalid:
-			err = errors.Join(ErrFailedChallenge, fmt.Errorf("challenge %q invalid", dns.URL), raw.Error)
-			return err
-		default:
-			err = UnexpectedChallengeStatusError(raw.Status)
-			return err
-		}
-
-		if err = pause(ctx, raw.retryAfter); err != nil {
-			return err
-		}
-
-		raw, err = c.fetchRawChallenge(ctx, dns.URL, id, key)
-	}
-
-	return err
-}
-
-func cleanup(ctx context.Context, fns []CleanupFunc) error {
-	var (
-		cancel context.CancelFunc
-		fn     CleanupFunc
-		err    error
-	)
-
-	ctx, cancel = context.WithTimeout(
+	ctx, cancel := context.WithTimeout(
 		context.WithoutCancel(ctx),
 		10*time.Second,
 	)
 	defer cancel()
 
-	for _, fn = range fns {
-		err = errors.Join(err, fn(ctx))
-	}
-
-	return err
+	return fn(ctx)
 }
 
 func (c Client) attempt(ctx context.Context, o *order, id string, key es256Key, domains []string, providers map[string]Provider, cfg OrderCfg) (b []byte, certKey *ecdsa.PrivateKey, err error) {
 	var (
-		ch                            chan error
-		az                            authz
-		auths, pendingAuths, badAuths []authz
-		url                           string
-		txt                           TXTRecord
-		fn                            CleanupFunc
-		records                       []TXTRecord
-		cleanups                      []CleanupFunc
-		i                             int
+		url string
 	)
 
 	ctx, cancel := context.WithCancel(ctx)
 
 	defer cancel()
 
-	if auths, err = c.fetchAuthz(ctx, o.Authorizations, id, key); err != nil {
-		return b, certKey, err
-	}
-
-	if len(auths) == 0 {
+	if len(o.Authorizations) == 0 {
 		return b, certKey, errors.New("no authorizations returned by the server")
 	}
 
-	pendingAuths, _, badAuths = partitionAuthz(auths)
-
-	if len(badAuths) > 0 {
-		err = ErrFailedAuthz
-		for _, az = range badAuths {
-			err = errors.Join(err, fmt.Errorf("authorization %q has status %s", az.Identifier.Value, az.Status))
-		}
-		return b, certKey, err
-	}
-
-	defer func() {
-		err = errors.Join(err, cleanup(withLogger(ctx, c.Log), cleanups))
-	}()
-
-	for _, az = range pendingAuths {
-		if txt, fn, err = c.provisionAuthz(ctx, key, az, providers, cfg.RecordTTLSeconds); err != nil {
-			err = errors.Join(err, fmt.Errorf("unable to provision authz: %v", az))
-			return b, certKey, err
-		}
-
-		records = append(records, txt)
-		cleanups = append(cleanups, fn)
-	}
-
-	for _, txt = range records {
-		if err = pollForDNS(ctx, c.Log, cfg.Resolver, txt, c.PollInterval); err != nil {
-			err = errors.Join(fmt.Errorf("unable to confirm dns record: %v", txt), err)
-			return b, certKey, err
-		}
-	}
-
-	ch = make(chan error, len(pendingAuths))
-
-	for _, az = range pendingAuths {
-		go func(ctx context.Context, key es256Key, az authz) {
-			ch <- c.validateAuthz(ctx, id, key, az)
-		}(ctx, key, az)
-	}
-
-	for i = range pendingAuths {
-		if err = errors.Join(err, <-ch); err != nil {
-			// cancel pending challenges if there are any
-			// and they have not already been cancelled
-			if ctx.Err() == nil && i != len(auths)-1 {
-				cancel()
-			}
-		}
-	}
-
-	if err != nil {
-		return b, certKey, err
-	}
-
-	if err = c.pollForValidAuthz(ctx, o.Authorizations, id, key); err != nil {
-		err = errors.Join(err, errors.New("failed to confirm authz validity"))
+	if err = c.handlePendingOrder(ctx, id, key, o, providers, cfg); err != nil {
 		return b, certKey, err
 	}
 
@@ -333,7 +172,7 @@ func (c Client) attempt(ctx context.Context, o *order, id string, key es256Key, 
 		return b, certKey, err
 	}
 
-	if certKey, err = ecdsa.GenerateKey(elliptic.P256(), rand.Reader); err != nil {
+	if certKey, err = ecdsa.GenerateKey(elliptic.P256(), nil); err != nil {
 		err = errors.Join(err, errors.New("failed to generate certificate private key"))
 		return b, nil, err
 	}
@@ -348,8 +187,7 @@ func (c Client) attempt(ctx context.Context, o *order, id string, key es256Key, 
 		return b, nil, err
 	}
 
-	b, err = c.downloadCert(ctx, url, id, key)
-	if err != nil {
+	if b, err = c.downloadCert(ctx, url, id, key); err != nil {
 		err = errors.Join(err, errors.New("failed to download certificate"))
 	}
 
@@ -366,10 +204,8 @@ func (c *Client) downloadCert(ctx context.Context, url, id string, key es256Key)
 	if res, err = c.signedPostID(ctx, url, id, key, postAsGetPayload); err != nil {
 		return b, err
 	}
-
-	defer func() {
-		err = errors.Join(err, res.Body.Close())
-	}()
+	//nolint: errcheck
+	defer res.Body.Close()
 
 	if res.StatusCode != http.StatusOK {
 		err = errors.New("server responded with an unexpected status: " + res.Status)
@@ -382,38 +218,26 @@ func (c *Client) downloadCert(ctx context.Context, url, id string, key es256Key)
 
 }
 
-func (c *Client) pollForValidAuthz(ctx context.Context, urls []string, id string, key es256Key) error {
+func (c *Client) pollForAuth(ctx context.Context, url, id string, key es256Key) error {
 	var (
-		authz authz
-		err   error
-		i     int
+		err error
+		a   authz
 	)
-
-	for i < len(urls) {
-
-		if err = c.fetchUnmarshalAuthz(ctx, urls[i], id, key, &authz); err != nil {
-			return err
-		}
-
-		switch authz.Status {
-		case authzStatusValid:
-			i++
-			continue
+	for err = c.fetchUnmarshalAuthz(ctx, url, id, key, &a); err == nil; err = c.fetchUnmarshalAuthz(ctx, url, id, key, &a) {
+		switch a.Status {
 		case authzStatusPending:
+		case authzStatusValid:
+			return nil
 		case authzStatusInvalid, authzStatusDeactivated, authzStatusExpired, authzStatusRevoked:
-			return errors.Join(ErrFailedAuthz, fmt.Errorf("authorization %q has status %s", authz.Identifier.Value, authz.Status))
+			return fmt.Errorf("authorization %q has status %s: %w", a.Identifier.Value, a.Status, ErrFailedAuthz)
 		default:
-			return UnexpectedAuthzStatusError(authz.Status)
+			return UnexpectedAuthzStatusError(a.Status)
 		}
-
-		if err = pause(ctx, authz.retryAfter); err != nil {
+		if err = pause(ctx, a.retryAfter); err != nil {
 			return err
 		}
-
 	}
-
-	return nil
-
+	return err
 }
 
 func (c *Client) pollForCertURL(ctx context.Context, url, id string, key es256Key, out *order) (string, error) {
@@ -488,10 +312,8 @@ func (c *Client) submitFinalize(ctx context.Context, url, id string, key es256Ke
 	if res, err = c.signedPostID(ctx, url, id, key, b); err != nil {
 		return err
 	}
-
-	defer func() {
-		err = errors.Join(err, res.Body.Close())
-	}()
+	//nolint: errcheck
+	defer res.Body.Close()
 
 	if res.StatusCode != http.StatusOK {
 		err = errors.New("server responded with an unexpected status: " + res.Status)
@@ -560,10 +382,8 @@ func (c *Client) fetchOrder(ctx context.Context, url, id string, key es256Key, o
 	if res, err = c.signedPostID(ctx, url, id, key, postAsGetPayload); err != nil {
 		return err
 	}
-
-	defer func() {
-		err = errors.Join(err, res.Body.Close())
-	}()
+	//nolint: errcheck
+	defer res.Body.Close()
 
 	if res.StatusCode != http.StatusOK {
 		err = errors.New("server responded with an unexpected status: " + res.Status)

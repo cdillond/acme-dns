@@ -46,7 +46,7 @@ func NewAccountKeyFromECDSAP256(k *ecdsa.PrivateKey) (AccountKey, error) {
 // PrivateKey returns the [Account]'s underlying private key as a [crypto.PrivateKey]. The concrete
 // type of the key is [*ecdsa.PrivateKey].
 func (a AccountKey) PrivateKey() crypto.PrivateKey {
-	return a.es256Key.pk
+	return a.pk
 }
 
 type es256Key struct {

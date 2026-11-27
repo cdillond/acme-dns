@@ -2,6 +2,7 @@ package acme
 
 import (
 	"encoding/json/v2"
+	"errors"
 	"fmt"
 )
 
@@ -26,6 +27,14 @@ func (p *Problem) Error() string {
 		return fmt.Sprintf("%#v", *p)
 	}
 	return string(b)
+}
+
+// joinProblem joins err with p, ignoring a nil problem.
+func joinProblem(err error, p *Problem) error {
+	if p == nil {
+		return err
+	}
+	return errors.Join(err, p)
 }
 
 // ProblemType is an ACME error type URI as defined in RFC 8555 Section 6.7.

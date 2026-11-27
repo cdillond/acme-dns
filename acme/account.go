@@ -26,11 +26,9 @@ var accountStrings = [accountStatusUnknown]string{
 
 func newAccountStatus(s string) AccountStatus {
 	n := slices.Index(accountStrings[:], s)
-
 	if n == -1 {
 		return accountStatusUnknown
 	}
-
 	return AccountStatus(n)
 }
 
@@ -38,7 +36,6 @@ func (a AccountStatus) String() string {
 	if a >= accountStatusUnknown {
 		return "unknown"
 	}
-
 	return accountStrings[a]
 }
 
